@@ -82,7 +82,11 @@ def create_app(test_config=None):
         CORS(app, resources={r'/api/*': {'origins': '*'}})
     else:
         CORS(app, resources={r'/api/*': {'origins': [o.strip() for o in cors_env.split(',') if o.strip()]}})
-    with app.app_context(): db.create_all() # production: migrate schema instead of relying on create_all
+    with app.app_context():
+        try:
+            db.create_all()
+        except Exception:
+            pass
     @app.errorhandler(400)
     def bad_request(e): return jsonify(error='Requête invalide'),400
     @app.errorhandler(404)
