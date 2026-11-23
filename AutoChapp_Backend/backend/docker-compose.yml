@@ -16,8 +16,13 @@ services:
   api:
     build: .
     restart: unless-stopped
-    ports: ["127.0.0.1:5888:5800"]
+    ports: ["${API_PORT:-5888}:5800"]
     environment:
+      POSTGRES_USER: autochapp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: autochapp
       DATABASE_URL: postgresql+psycopg2://autochapp:${POSTGRES_PASSWORD}@db:5432/autochapp
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
       BRIDGE_SECRET: ${BRIDGE_SECRET:?Set BRIDGE_SECRET}
@@ -26,7 +31,7 @@ services:
       AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
       AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com/v1}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8188}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
     depends_on:
       db: {condition: service_healthy}
     networks: [core]

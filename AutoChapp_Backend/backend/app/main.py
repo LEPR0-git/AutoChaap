@@ -1,5 +1,6 @@
 """AutoChapp API. WhatsApp bridge is internal; access controlled by ownership."""
 import os, uuid, re, datetime, functools
+from urllib.parse import quote_plus
 from flask import Flask, jsonify, request, g
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
@@ -50,13 +51,37 @@ def serialize_account(a): return dict(id=a.id,label=a.label,phone=a.phone,status
 def serialize_conversation(c): return dict(id=c.id,account_id=c.account_id,jid=c.jid,title=c.title,mode=c.mode,instructions=c.instructions or '',hybrid_rule=c.hybrid_rule,keywords=c.keywords or '',business_hours=c.business_hours,cooldown_seconds=c.cooldown_seconds)
 def serialize_message(m): return dict(id=m.id,conversation_id=m.conversation_id,content=m.content,direction=m.direction,sender=m.sender,created_at=m.created_at.isoformat() if m.created_at else None)
 
+def get_db_uri():
+    raw = os.getenv('DATABASE_URL', '').strip()
+    if raw.startswith('postgresql') and raw.count('@') > 1:
+        try:
+            proto, rest = raw.split('://', 1)
+            creds, host_part = rest.rsplit('@', 1)
+            if ':' in creds:
+                user, pwd = creds.split(':', 1)
+                return f"{proto}://{user}:{quote_plus(pwd)}@{host_part}"
+        except Exception:
+            pass
+    if not raw and os.getenv('POSTGRES_PASSWORD'):
+        u = os.getenv('POSTGRES_USER', 'autochapp')
+        p = quote_plus(os.getenv('POSTGRES_PASSWORD', ''))
+        h = os.getenv('POSTGRES_HOST', 'db')
+        port = os.getenv('POSTGRES_PORT', '5432')
+        d = os.getenv('POSTGRES_DB', 'autochapp')
+        return f"postgresql+psycopg2://{u}:{p}@{h}:{port}/{d}"
+    return raw or 'sqlite:////tmp/autochapp.db'
+
 def create_app(test_config=None):
     app=Flask(__name__)
-    app.config.update(SQLALCHEMY_DATABASE_URI=os.getenv('DATABASE_URL','sqlite:////tmp/autochapp.db'),SQLALCHEMY_TRACK_MODIFICATIONS=False,JWT_SECRET=os.getenv('JWT_SECRET',''),BRIDGE_URL=os.getenv('BRIDGE_URL','http://bridge:3100'),BRIDGE_SECRET=os.getenv('BRIDGE_SECRET',''),AI_BASE_URL=os.getenv('AI_BASE_URL','https://api.openai.com/v1'),AI_API_KEY=os.getenv('AI_API_KEY',''),AI_MODEL=os.getenv('AI_MODEL','gpt-4o-mini'),GOOGLE_CLIENT_ID=os.getenv('GOOGLE_CLIENT_ID',''))
+    app.config.update(SQLALCHEMY_DATABASE_URI=get_db_uri(),SQLALCHEMY_TRACK_MODIFICATIONS=False,JWT_SECRET=os.getenv('JWT_SECRET',''),BRIDGE_URL=os.getenv('BRIDGE_URL','http://bridge:3100'),BRIDGE_SECRET=os.getenv('BRIDGE_SECRET',''),AI_BASE_URL=os.getenv('AI_BASE_URL','https://api.openai.com/v1'),AI_API_KEY=os.getenv('AI_API_KEY',''),AI_MODEL=os.getenv('AI_MODEL','gpt-4o-mini'),GOOGLE_CLIENT_ID=os.getenv('GOOGLE_CLIENT_ID',''))
     if test_config: app.config.update(test_config)
     if not app.config['JWT_SECRET']: raise RuntimeError('JWT_SECRET must be configured')
     db.init_app(app)
-    CORS(app,resources={r'/api/*':{'origins':os.getenv('CORS_ORIGINS','http://localhost:8188').split(',')}})
+    cors_env = os.getenv('CORS_ORIGINS', '*').strip()
+    if cors_env == '*' or not cors_env:
+        CORS(app, resources={r'/api/*': {'origins': '*'}})
+    else:
+        CORS(app, resources={r'/api/*': {'origins': [o.strip() for o in cors_env.split(',') if o.strip()]}})
     with app.app_context(): db.create_all() # production: migrate schema instead of relying on create_all
     @app.errorhandler(400)
     def bad_request(e): return jsonify(error='Requête invalide'),400
