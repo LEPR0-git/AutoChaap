@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: autochapp
+      POSTGRES_DB: autochapp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U autochapp -d autochapp"]
+      interval: 5s
+      retries: 12
+    networks: [core]
+  api:
+    build: .
+    restart: unless-stopped
+    ports: ["127.0.0.1:5888:5800"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://autochapp:${POSTGRES_PASSWORD}@db:5432/autochapp
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      BRIDGE_SECRET: ${BRIDGE_SECRET:?Set BRIDGE_SECRET}
+      BRIDGE_URL: http://bridge:3100
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com/v1}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8188}
+    depends_on:
+      db: {condition: service_healthy}
+    networks: [core]
+  bridge:
+    build: ./bridge
+    restart: unless-stopped
+    environment:
+      BRIDGE_SECRET: ${BRIDGE_SECRET:?Set BRIDGE_SECRET}
+      CALLBACK_URL: http://api:5800/internal/events
+      PORT: 3100
+    volumes:
+      - whatsapp_sessions:/srv/sessions
+    networks: [core]
+volumes:
+  postgres_data:
+  whatsapp_sessions:
+networks:
+  core: {}
