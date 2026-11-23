@@ -1,7 +1,8 @@
 <script setup>
 import {ref,computed,onMounted,onUnmounted,nextTick} from 'vue';
 import {MessageCircle,LayoutDashboard,Plus,Search,LogOut,Send,Settings2,Smartphone,ShieldCheck,Bot,UserRound,Blend,ChevronDown,RefreshCw,Trash2,X,Menu,CheckCircle2,AlertCircle,Lock,Mail,ArrowRight,Sparkles,Radio,Wifi,Clock,MoreHorizontal} from 'lucide-vue-next';
-const API = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.location.hostname ? `${window.location.protocol}//${window.location.hostname}:5888` : 'http://localhost:5888');
+const rawApi = (import.meta.env.VITE_API_URL || '').trim();
+const API = (rawApi && rawApi !== 'http://localhost:5888') ? rawApi : '';
 const token=ref(localStorage.getItem('autochapp_token')||'');const currentUser=ref(JSON.parse(localStorage.getItem('autochapp_user')||'null'));
 const authMode=ref('login'),form=ref({name:'',email:'',password:''}),busy=ref(false),error=ref(''),notice=ref('');
 const accounts=ref([]),conversations=ref([]),messages=ref([]),activeAccount=ref(null),activeConversation=ref(null),section=ref('inbox'),query=ref(''),draft=ref(''),showAdd=ref(false),newAccountName=ref(''),qrData=ref(null),showSettings=ref(false),settings=ref({}),sidebarMobile=ref(false),bottom=ref(null);

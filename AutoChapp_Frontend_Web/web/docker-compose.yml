@@ -3,9 +3,17 @@ services:
     build:
       context: .
       args:
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:5888}
+        VITE_API_URL: ${VITE_API_URL:-}
         VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
     restart: unless-stopped
     ports:
-          - "0.0.0.0:8188:80"
+      - "0.0.0.0:8188:80"
+    networks:
+      - default
+      - backend_core
 
+networks:
+  default: {}
+  backend_core:
+    name: backend_core
+    external: true
