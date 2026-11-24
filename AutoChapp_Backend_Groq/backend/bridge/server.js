@@ -1,5 +1,5 @@
 import express from 'express';
-import makeWASocket, {useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers} from '@whiskeysockets/baileys';
+import makeWASocket, {useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion} from '@whiskeysockets/baileys';
 import pino from 'pino';
 import QRCode from 'qrcode';
 import fs from 'node:fs/promises';
@@ -60,17 +60,20 @@ async function connect(id){
  const {state,saveCreds}=await useMultiFileAuthState(stateDir);
  const entry={sock:null,status:'connecting',qr:null,phone:null};sessions.set(id,entry);
  const {version}=await fetchLatestBaileysVersion().catch(()=>({version:undefined}));
- const opts={auth:state,logger:pino({level:'silent'}),browser:Browsers.macOS('Desktop'),syncFullHistory:true,shouldSyncHistoryMessage:()=>true,markOnlineOnConnect:false};if(version)opts.version=version;
- const sock=makeWASocket(opts);entry.sock=sock;
+ const opts={auth:state,logger:pino({level:'silent'}),browser:['AutoChapp','Chrome','1.0.0'],syncFullHistory:true,shouldSyncHistoryMessage:()=>true,markOnlineOnConnect:false};if(version)opts.version=version;
+ let sock;
+ try{sock=makeWASocket(opts);entry.sock=sock;}catch(e){sessions.delete(id);console.error('Socket initialization failed:',e.message,'account',id);throw e;}
+ console.log('WhatsApp connecting (Chrome)','account',id);
  sock.ev.on('creds.update',saveCreds);
  sock.ev.on('connection.update',async ({connection,qr,lastDisconnect})=>{
    if(sessions.get(id)!==entry)return;
-   if(qr){entry.qr=await QRCode.toDataURL(qr);entry.status='qr';await emit({type:'status',account_id:id,status:'qr'})}
-   if(connection==='open'){entry.status='connected';entry.qr=null;entry.phone=sock.user?.id?.split(':')[0]?.split('@')[0]||null;await emit({type:'status',account_id:id,status:'connected',phone:entry.phone})}
+   if(qr){entry.qr=await QRCode.toDataURL(qr);entry.status='qr';console.log('WhatsApp QR ready','account',id);await emit({type:'status',account_id:id,status:'qr'})}
+   if(connection==='open'){console.log('WhatsApp connected','account',id);entry.status='connected';entry.qr=null;entry.phone=sock.user?.id?.split(':')[0]?.split('@')[0]||null;await emit({type:'status',account_id:id,status:'connected',phone:entry.phone})}
    if(connection==='close'){
      entry.status='disconnected';entry.qr=null;await emit({type:'status',account_id:id,status:'disconnected'});
      const code=lastDisconnect?.error?.output?.statusCode;
-     if(code!==DisconnectReason.loggedOut){sessions.delete(id);setTimeout(()=>connect(id).catch(e=>console.error('Reconnect:',e.message)),3500)}
+     console.warn('WhatsApp connection closed','code',code||'unknown','account',id);
+     if(code!==DisconnectReason.loggedOut){sessions.delete(id);setTimeout(()=>{if(!sessions.has(id))connect(id).catch(e=>console.error('Reconnect:',e.message))},3500)}
    }
  });
  const titles=new Map();let queue=Promise.resolve();
@@ -104,7 +107,7 @@ async function connect(id){
  }));
  return entry;
 }
-app.post('/sessions/:id/connect',async(req,res)=>{try{const s=await connect(req.params.id);res.json({status:s.status,qr:s.qr,phone:s.phone})}catch(e){res.status(503).json({error:e.message})}});
+app.post('/sessions/:id/connect',async(req,res)=>{try{const s=await connect(req.params.id);res.json({status:s.status,qr:s.qr,phone:s.phone})}catch(e){console.error('Connect request failed:',e.message,'account',req.params.id);res.status(503).json({error:e.message})}});
 app.get('/sessions/:id/status',(req,res)=>{const s=sessions.get(req.params.id);res.json({status:s?.status||'disconnected',qr:s?.qr||null,phone:s?.phone||null})});
 app.post('/sessions/:id/send',async(req,res)=>{const s=sessions.get(req.params.id);let {jid,text}=req.body||{};
  if(!s||s.status!=='connected')return res.status(503).json({error:'WhatsApp non connecté'});
