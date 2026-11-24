@@ -373,8 +373,9 @@ def create_app(test_config=None):
                 if len(raw)>5*1024*1024:raise ValueError()
                 pdf=PdfReader(BytesIO(raw))
                 if len(pdf.pages)>100:raise ValueError()
-                body='\n'.join('[Page '+str(i+1)+'] '+(page.extract_text() or '') for i,page in enumerate(pdf.pages))[:120000]
-                if len(body.strip())<20 or not any((page.extract_text() or '').strip() for page in pdf.pages):raise ValueError()
+                pages=[(page.extract_text() or '') for page in pdf.pages]
+                if not any(t.strip() for t in pages):raise ValueError()
+                body='\n'.join('[Page '+str(i+1)+'] '+t for i,t in enumerate(pages))[:120000]
             except Exception:return jsonify(error='PDF illisible, scanné ou trop volumineux'),400
             kind='pdf';title=f.filename
         else:
@@ -450,7 +451,7 @@ def create_app(test_config=None):
         title=str(row.get('title') or jid)[:150]
         insert_once(Conversation,dict(id=identifier(),account_id=aid,jid=jid,title=title),['account_id','jid'])
         c=Conversation.query.filter_by(account_id=aid,jid=jid).one()
-        if c.title==jid and title!=jid:c.title=title
+        if c.title in (jid,jid.split('@')[0]) and title!=jid:c.title=title
         return c
     def store_event_message(aid,row,live=False):
         ext=row.get('message_id');text=row.get('text')
@@ -471,12 +472,16 @@ def create_app(test_config=None):
         if d.get('type')=='status':
             a.status=str(d.get('status','disconnected'))[:30];a.phone=str(d.get('phone') or '')[:50] or a.phone;db.session.commit();return jsonify(ok=True)
         if d.get('type')=='history':
-            chats=d.get('chats',[]);messages=d.get('messages',[])
-            if not isinstance(chats,list) or not isinstance(messages,list) or len(chats)+len(messages)>100:
+            chats=d.get('chats',[]);messages=d.get('messages',[]);contacts=d.get('contacts',[])
+            if not isinstance(chats,list) or not isinstance(messages,list) or not isinstance(contacts,list) or len(chats)+len(messages)+len(contacts)>100:
                 return jsonify(error='Lot historique invalide'),400
             saved_chats=saved_messages=0
             for row in chats:
                 if isinstance(row,dict) and get_or_create_chat(aid,row) is not None:saved_chats+=1
+            for row in contacts:
+                if isinstance(row,dict) and valid_jid(row.get('jid')) and row.get('title'):
+                    conv=Conversation.query.filter_by(account_id=aid,jid=row['jid']).first()
+                    if conv:conv.title=str(row['title'])[:150]
             for row in messages:
                 if isinstance(row,dict):
                     _,_,added=store_event_message(aid,row);saved_messages+=int(added)
