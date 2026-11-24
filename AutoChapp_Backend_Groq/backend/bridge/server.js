@@ -40,7 +40,7 @@ async function messageEvent(sock,id,msg,titles){
  if(!jid||!msg.key?.id)return null;
  const text=content(msg);if(!text)return null;
  const ts=Number(msg.messageTimestamp);
- return {jid,text:text.slice(0,10000),message_id:id+':'+msg.key.id,title:titles.get(jid)||(!msg.key.fromMe&&!jid.endsWith('@g.us')?msg.pushName:null)||jid,from_me:!!msg.key.fromMe,timestamp:Number.isFinite(ts)&&ts>0?ts:null};
+ return {jid,text:text.slice(0,10000),message_id:id+':'+msg.key.id,title:(titles.get(jid)!==jid?titles.get(jid):null)||(!msg.key.fromMe&&!jid.endsWith('@g.us')?msg.pushName:null)||jid,from_me:!!msg.key.fromMe,timestamp:Number.isFinite(ts)&&ts>0?ts:null};
 }
 async function syncBatch(id,kind,items){
  let imported=0;
@@ -94,6 +94,17 @@ async function connect(id){
    const rows=[];for(const msg of messages){const row=await messageEvent(sock,id,msg,titles);if(row)rows.push(row);}
    if(rows.length)await syncBatch(id,'messages',rows);
  }));
+ async function updateContacts(contacts){
+   const rows=[];
+   for(const contact of contacts||[]){
+     const jid=await canonicalJid(sock,contact.id,contact.phoneNumber);
+     const title=contact.name||contact.notify||contact.verifiedName;
+     if(jid&&title){titles.set(jid,title);rows.push({jid,title});}
+   }
+   if(rows.length)await syncBatch(id,'contacts',rows);
+ }
+ sock.ev.on('contacts.upsert',contacts=>enqueue(()=>updateContacts(contacts)));
+ sock.ev.on('contacts.update',contacts=>enqueue(()=>updateContacts(contacts)));
  sock.ev.on('chats.upsert',chats=>enqueue(()=>importChats(chats)));
  sock.ev.on('messages.upsert',({messages,type})=>enqueue(async()=>{
    if(type!=='notify'&&type!=='append')return;
