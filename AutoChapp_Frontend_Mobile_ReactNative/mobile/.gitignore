@@ -4,3 +4,10 @@ android
 ios
 dist
 .env
+
+# Local Android signing and generated files
+*.jks
+*.keystore
+android/
+dist/
+.env
