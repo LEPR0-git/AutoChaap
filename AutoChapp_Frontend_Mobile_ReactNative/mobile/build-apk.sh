@@ -70,7 +70,7 @@ apk=$(find android/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -prin
 mkdir -p dist
 tools="$ANDROID_HOME/build-tools/36.0.0"
 "$tools/zipalign" -P 16 -f 4 "$apk" dist/aligned.apk
-"$tools/apksigner" sign --ks "$key" --ks-key-alias autochapp --ks-pass "file:$password_file" --key-pass "file:$password_file" --out dist/autochapp.apk dist/aligned.apk
+AUTOCHAPP_SIGN_PASSWORD="$(< "$password_file")" "$tools/apksigner" sign --ks "$key" --ks-key-alias autochapp --ks-pass env:AUTOCHAPP_SIGN_PASSWORD --key-pass env:AUTOCHAPP_SIGN_PASSWORD --out dist/autochapp.apk dist/aligned.apk
 rm -f dist/aligned.apk
 "$tools/apksigner" verify --verbose --print-certs dist/autochapp.apk
 sha256sum dist/autochapp.apk
