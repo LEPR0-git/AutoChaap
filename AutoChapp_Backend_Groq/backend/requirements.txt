@@ -7,3 +7,5 @@ requests>=2.31,<3
 gunicorn>=22,<24
 google-auth>=2.29,<3
 pytest>=8,<10
+
+pypdf>=5,<7
