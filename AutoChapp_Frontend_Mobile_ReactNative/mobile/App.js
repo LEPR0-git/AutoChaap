@@ -39,7 +39,7 @@ export default function App(){
   const position=useRef(new Animated.ValueXY({x:12,y:90})).current;
   const pos=useRef({x:12,y:90});
   const pan=useMemo(()=>PanResponder.create({onMoveShouldSetPanResponder:(_,g)=>Math.abs(g.dx)+Math.abs(g.dy)>5,onPanResponderGrant:()=>{position.stopAnimation(v=>{pos.current=v})},onPanResponderMove:(_,g)=>position.setValue({x:Math.max(0,Math.min(width-70,pos.current.x+g.dx)),y:Math.max(0,Math.min(height-90,pos.current.y+g.dy))}),onPanResponderRelease:(_,g)=>{pos.current={x:Math.max(0,Math.min(width-70,pos.current.x+g.dx)),y:Math.max(0,Math.min(height-90,pos.current.y+g.dy))};position.setValue(pos.current)}}),[width,height,position]);
-  current.current={active,page,qr,mini,token,url};
+  current.current={active,page,qr,mini,token,url,menu};
   useEffect(()=>{const sub=AppState.addEventListener('change',s=>{foreground.current=s==='active'});return()=>sub.remove()},[]);
   useEffect(()=>{if(Platform.OS==='android')UIManager.setLayoutAnimationEnabledExperimental?.(true);const phrases=['Toutes vos conversations.','Votre assistant intelligent.','Vos clients, votre rythme.'];let i=0,j=0,back=false,timer;const tick=()=>{j+=back?-1:1;setTyped(phrases[i].slice(0,j));let delay=back?35:75;if(j===phrases[i].length){back=true;delay=1300}else if(j===0&&back){back=false;i=(i+1)%phrases.length;delay=250}timer=setTimeout(tick,delay)};tick();return()=>clearTimeout(timer)},[]);
   const visibleConvs=useMemo(()=>convs.filter(c=>(!filter||c.account_id===filter)&&((c.title||'')+' '+c.jid+' '+(c.last_message||'')).toLowerCase().includes(query.toLowerCase())).sort((a,b)=>(Date.parse(b.last_message_at)||0)-(Date.parse(a.last_message_at)||0)),[convs,filter,query]);
@@ -49,7 +49,7 @@ export default function App(){
     const gen=session.current;const d=await req('/api/conversations/'+id+'/messages');if(gen!==session.current)return;
     if(miniView?current.current.mini?.id===id:current.current.active?.id===id&&current.current.page==='chat'){
       (miniView?setMiniMsgs:setMsgs)(d.messages);
-      if(!menu)await markRead(id,d.messages);
+      if(!current.current.menu)await markRead(id,d.messages);
     }
   }
   async function loadSources(id){const d=await req('/api/conversations/'+id+'/knowledge');setSources(d.sources)}
@@ -90,6 +90,12 @@ export default function App(){
 
   function fail(e){Alert.alert('AutoChapp',e.message||String(e))}
 
+  async function saveServer(){
+    const next=apiUrlDraft.trim().replace(/\/$/,'');
+    if(!/^https?:\/\/[^\s/]+(?:\/[^\s]*)?$/i.test(next)){fail(Error('Adresse API invalide'));return;}
+    if(next!==url&&token)await disconnect();
+    setUrl(next);await AsyncStorage.setItem('api_url',next);setPage('inbox');
+  }
   async function acceptAuth(d){
     await SecureStore.setItemAsync('autochapp_token',d.token);
     await AsyncStorage.setItem('user',JSON.stringify(d.user));
@@ -250,8 +256,8 @@ export default function App(){
           <Text style={{textAlign:'center',color:C.muted,marginTop:20}}>⚙ Configurer l'adresse du serveur</Text>
         </TouchableOpacity>
         {page==='api-settings'&&<View style={{marginTop:14}}>
-          <Field value={apiUrlDraft} onChangeText={setApiUrlDraft} placeholder="http://37.60.250.220:5888"/>
-          <Btn onPress={async()=>{const cleaned=apiUrlDraft.trim().replace(/\/$/,'');setUrl(cleaned);await AsyncStorage.setItem('api_url',cleaned);setPage('inbox')}}>Enregistrer l'adresse</Btn>
+          <Field value={apiUrlDraft} onChangeText={setApiUrlDraft} placeholder="https://api.votre-domaine.cm"/>
+          <Btn onPress={saveServer}>Enregistrer l'adresse</Btn>
         </View>}
       </ScrollView>
     </SafeAreaView>
@@ -474,8 +480,8 @@ export default function App(){
             <Text style={styles.cardTitle}>{me?.name}</Text>
             <Text style={styles.muted}>{me?.email} ({me?.role==='admin'?'Administrateur':'Utilisateur'})</Text>
             <Text style={[styles.label,{marginTop:20}]}>Adresse du backend API</Text>
-            <Field value={apiUrlDraft} onChangeText={setApiUrlDraft} placeholder="http://37.60.250.220:5888"/>
-            <Btn onPress={async()=>{const x=apiUrlDraft.trim().replace(/\/$/,'');setUrl(x);await AsyncStorage.setItem('api_url',x);Alert.alert('API','Adresse mise à jour')}}>Enregistrer l'adresse</Btn>
+            <Field value={apiUrlDraft} onChangeText={setApiUrlDraft} placeholder="https://api.votre-domaine.cm"/>
+            <Btn onPress={saveServer}>Enregistrer l'adresse</Btn>
             <Btn secondary style={{marginTop:13}} onPress={disconnect}>Se déconnecter</Btn>
           </View>
         </ScrollView>
