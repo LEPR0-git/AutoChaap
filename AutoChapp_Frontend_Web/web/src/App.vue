@@ -118,8 +118,13 @@ async function refresh(){
       qrData.value={...qrData.value,...s};
       if(s.status==='connected'){
         notifySuccess(`Compte ${qrData.value.label} connecté avec succès !`);
+        const connectedId=qrData.value.id;
         qrData.value=null;
         await load();
+        activeAccount.value=accounts.value.find(x=>x.id===connectedId)||null;
+        activeConversation.value=null;
+        messages.value=[];
+        section.value='inbox';
       }
     }
   }catch{}
@@ -142,6 +147,14 @@ async function connect(account){
     qrData.value={id:account.id,label:account.label,status:'connecting',qr:null};
     const d=await api(`/api/accounts/${account.id}/qr`);
     qrData.value={...qrData.value,...d};
+    if(d.status==='connected'){
+      qrData.value=null;
+      await load();
+      activeAccount.value=accounts.value.find(x=>x.id===account.id)||null;
+      activeConversation.value=null;
+      messages.value=[];
+      section.value='inbox';
+    }
   }catch(e){notify(e)}
 }
 

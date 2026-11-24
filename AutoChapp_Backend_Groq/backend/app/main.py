@@ -7,6 +7,8 @@ from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt, requests
 from sqlalchemy import UniqueConstraint
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 db=SQLAlchemy()
 def now(): return datetime.datetime.now(datetime.timezone.utc)
@@ -274,8 +276,7 @@ def create_app(test_config=None):
     def push_message(c,content,sender):
         data,status=bridge_call('POST',f'/sessions/{c.account_id}/send',{'jid':c.jid,'text':content})
         if status!=200:return jsonify(data),status
-        m=Message(conversation_id=c.id,content=content,direction='out',sender=sender,external_id=(data.get('messageId') or identifier()))
-        db.session.add(m);db.session.commit();return jsonify(message=serialize_message(m)),201
+        m=record_sent(c,content,sender,data.get('messageId'));db.session.commit();return jsonify(message=serialize_message(m)),201
     @app.post('/api/conversations/<cid>/messages')
     @auth
     def send(cid):
@@ -315,6 +316,37 @@ def create_app(test_config=None):
             r=requests.post(base_url.rstrip('/')+'/chat/completions',headers={'Authorization':'Bearer '+api_key},json={'model':model_id,'messages':msgs,'temperature':0.5,'max_tokens':350},timeout=20)
             r.raise_for_status();return r.json()['choices'][0]['message']['content'].strip()[:5000]
         except (requests.RequestException,KeyError,IndexError,TypeError):app.logger.exception('AI provider unavailable');return None
+    def valid_jid(jid):
+        return isinstance(jid,str) and bool(re.fullmatch(r'(?:\d{1,30}@(s\.whatsapp\.net|lid)|\d+(?:-\d+)?@g\.us)',jid))
+    def insert_once(model,values,index):
+        insert=pg_insert if db.session.get_bind().dialect.name=='postgresql' else sqlite_insert
+        result=db.session.execute(insert(model).values(**values).on_conflict_do_nothing(index_elements=index))
+        return result.rowcount==1
+    def record_sent(c,text,sender,external_id):
+        ext=external_id or identifier()
+        insert_once(Message,dict(id=identifier(),conversation_id=c.id,external_id=ext,content=text,direction='out',sender=sender),['external_id'])
+        m=Message.query.filter_by(external_id=ext).one()
+        if m.conversation_id==c.id:m.sender=sender
+        return m
+    def get_or_create_chat(aid,row):
+        jid=row.get('jid')
+        if not valid_jid(jid):return None
+        title=str(row.get('title') or jid)[:150]
+        insert_once(Conversation,dict(id=identifier(),account_id=aid,jid=jid,title=title),['account_id','jid'])
+        c=Conversation.query.filter_by(account_id=aid,jid=jid).one()
+        if c.title==jid and title!=jid:c.title=title
+        return c
+    def store_event_message(aid,row):
+        ext=row.get('message_id');text=row.get('text')
+        if not isinstance(ext,str) or not ext or len(ext)>200 or not isinstance(text,str) or not text:return None,None,False
+        c=get_or_create_chat(aid,row)
+        if c is None:return None,None,False
+        sent=bool(row.get('from_me'));ts=row.get('timestamp')
+        try:created=datetime.datetime.fromtimestamp(float(ts),datetime.timezone.utc) if ts and float(ts)>0 else now()
+        except (ValueError,TypeError,OverflowError,OSError):created=now()
+        mid=identifier()
+        added=insert_once(Message,dict(id=mid,conversation_id=c.id,external_id=ext,content=text[:10000],direction='out' if sent else 'in',sender='human' if sent else 'contact',created_at=created),['external_id'])
+        return c,db.session.get(Message,mid) if added else None,added
     @app.post('/internal/events')
     def events():
         if not app.config['BRIDGE_SECRET'] or request.headers.get('X-Bridge-Secret')!=app.config['BRIDGE_SECRET']:return jsonify(error='Interdit'),403
@@ -322,19 +354,30 @@ def create_app(test_config=None):
         if not a:return jsonify(error='Compte inconnu'),404
         if d.get('type')=='status':
             a.status=str(d.get('status','disconnected'))[:30];a.phone=str(d.get('phone') or '')[:50] or a.phone;db.session.commit();return jsonify(ok=True)
-        if d.get('type')!='message' or d.get('from_me') or not d.get('jid') or not d.get('text'):return jsonify(ignored=True)
-        ext=str(d.get('message_id') or '')
-        if ext and Message.query.filter_by(external_id=ext).first():return jsonify(duplicate=True)
-        jid=str(d['jid'])[:150];c=Conversation.query.filter_by(account_id=aid,jid=jid).first()
-        if not c:c=Conversation(account_id=aid,jid=jid,title=str(d.get('title') or jid)[:150]);db.session.add(c);db.session.flush()
-        m=Message(conversation_id=c.id,external_id=ext or None,content=str(d['text'])[:10000],direction='in',sender='contact');db.session.add(m);db.session.commit()
-        should_reply=c.mode=='ai' or(c.mode=='hybrid' and hybrid_enabled(c,m.content))
+        if d.get('type')=='history':
+            chats=d.get('chats',[]);messages=d.get('messages',[])
+            if not isinstance(chats,list) or not isinstance(messages,list) or len(chats)+len(messages)>100:
+                return jsonify(error='Lot historique invalide'),400
+            saved_chats=saved_messages=0
+            for row in chats:
+                if isinstance(row,dict) and get_or_create_chat(aid,row) is not None:saved_chats+=1
+            for row in messages:
+                if isinstance(row,dict):
+                    _,_,added=store_event_message(aid,row);saved_messages+=int(added)
+            db.session.commit()
+            return jsonify(ok=True,chats=saved_chats,messages=saved_messages)
+        if d.get('type')!='message' or d.get('from_me'):return jsonify(ignored=True)
+        c,m,added=store_event_message(aid,d);db.session.commit()
+        if c is None:return jsonify(ignored=True)
+        if not added:return jsonify(duplicate=True)
+        jid=c.jid
+        should_reply=not jid.endswith('@g.us') and (c.mode=='ai' or(c.mode=='hybrid' and hybrid_enabled(c,m.content)))
         if should_reply and (not c.last_auto_at or (now()-c.last_auto_at.replace(tzinfo=datetime.timezone.utc) if c.last_auto_at.tzinfo is None else now()-c.last_auto_at).total_seconds()>=c.cooldown_seconds):
             reply=ai_response(c)
             if reply:
                 data,status=bridge_call('POST',f'/sessions/{aid}/send',{'jid':jid,'text':reply})
                 if status==200:
-                    db.session.add(Message(conversation_id=c.id,content=reply,direction='out',sender='ai',external_id=data.get('messageId') or identifier()));c.last_auto_at=now();db.session.commit()
+                    record_sent(c,reply,'ai',data.get('messageId'));c.last_auto_at=now();db.session.commit()
         return jsonify(ok=True,conversation_id=c.id)
 
     # ---- USER AI MODELS ----

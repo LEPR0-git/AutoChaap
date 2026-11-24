@@ -34,3 +34,27 @@ def test_webhook_dedup(client):
     assert client.post('/internal/events',headers=hdr,json=body).status_code==200
     assert client.post('/internal/events',headers=hdr,json=body).json['duplicate']
     with client.application.app_context():assert Message.query.count()==1
+
+def test_history_import(client,monkeypatch):
+    h=user(client);aid=client.post('/api/accounts',headers=h,json={'label':'History'}).json['account']['id']
+    other=user(client,'other-history@example.org')
+    hdr={'X-Bridge-Secret':'bridge-test'}
+    jid='237690000000@s.whatsapp.net'
+    body={'type':'history','account_id':aid,'chats':[{'jid':jid,'title':'Alice'},{'jid':'12345@lid','title':'LID'},{'jid':'12345-12345@g.us','title':'Group'},{'jid':'status@broadcast'}],'messages':[
+        {'jid':jid,'text':'ancien','message_id':aid+':in','timestamp':1700000000,'from_me':False},
+        {'jid':jid,'text':'reponse','message_id':aid+':out','timestamp':1700000001,'from_me':True}]}
+    assert client.post('/internal/events',json=body).status_code==403
+    assert client.post('/internal/events',headers=hdr,json=body).json['messages']==2
+    convs=client.get('/api/conversations',headers=h).json['conversations']
+    assert len(convs)==3
+    assert client.get('/api/conversations',headers=other).json['conversations']==[]
+    cid=next(c['id'] for c in convs if c['jid']==jid)
+    assert client.patch('/api/conversations/'+cid+'/settings',headers=h,json={'mode':'ai'}).status_code==200
+    def unexpected(*args,**kwargs):raise AssertionError('History must not trigger AI or send')
+    monkeypatch.setattr('app.main.requests.post',unexpected)
+    assert client.post('/internal/events',headers=hdr,json=body).json['messages']==0
+    body['messages'][0]['message_id']=aid+':new-history'
+    assert client.post('/internal/events',headers=hdr,json=body).json['messages']==1
+    msgs=client.get('/api/conversations/'+cid+'/messages',headers=h).json['messages']
+    assert len(msgs)==3
+    assert any(m['direction']=='out' and m['content']=='reponse' for m in msgs)
