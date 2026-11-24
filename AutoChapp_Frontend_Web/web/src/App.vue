@@ -1,5 +1,5 @@
 <script setup>
-import {ref,computed,onMounted,onUnmounted,nextTick} from 'vue';
+import {ref,computed,onMounted,onUnmounted,nextTick,watch} from 'vue';
 import {MessageCircle,LayoutDashboard,Plus,Search,LogOut,Send,Settings2,Smartphone,ShieldCheck,Bot,UserRound,Blend,ChevronDown,RefreshCw,Trash2,X,Menu,CheckCircle2,AlertCircle,Lock,Mail,ArrowRight,Sparkles,Radio,Wifi,Clock,MoreHorizontal,Users,Cpu,Key,Check,ArrowLeft,Shield,AlertTriangle} from 'lucide-vue-next';
 
 const rawApi = (import.meta.env.VITE_API_URL || '').trim();
@@ -11,16 +11,69 @@ const accounts=ref([]),conversations=ref([]),messages=ref([]),activeAccount=ref(
 const aiModels=ref([]);
 const adminTab=ref('stats'),adminStats=ref(null),adminUsers=ref([]),adminModels=ref([]),adminActivityUser=ref(null),adminActivityData=ref([]),showModelModal=ref(false),modelForm=ref({id:null,name:'',model_id:'',base_url:'',api_key:'',is_default:false});
 let poll=null;
+const opened=ref([]),floating=ref([]),drafts=ref({}),sources=ref([]),sourceForm=ref({kind:'text',title:'',content:''}),pdfFile=ref(null),sourceBusy=ref(false);
+const phrases=['Toutes vos conversations.','Un assistant qui vous comprend.','Vos clients, votre rythme.','Une messagerie intelligente.'];
+const typed=ref('');let typeTimer=null,phrase=0,letter=0,erasing=false;
+function typeStep(){
+  const line=phrases[phrase];
+  letter+=erasing?-1:1;typed.value=line.slice(0,letter);
+  let delay=erasing?35:65;
+  if(letter===line.length){erasing=true;delay=1600}
+  if(letter===0&&erasing){erasing=false;phrase=(phrase+1)%phrases.length;delay=300}
+  typeTimer=setTimeout(typeStep,delay);
+}
+function closeTab(id){
+  opened.value=opened.value.filter(x=>x!==id);
+  if(activeConversation.value?.id===id){const next=conversations.value.find(c=>c.id===opened.value.at(-1));if(next)selectConversation(next);else{activeConversation.value=null;messages.value=[];draft.value=''}}
+}
+const openChats=computed(()=>opened.value.map(id=>conversations.value.find(c=>c.id===id)).filter(Boolean));
+function floatChat(c){
+  if(floating.value.some(x=>x.id===c.id))return;
+  const n=floating.value.length;floating.value.push({id:c.id,title:c.title,x:Math.max(0,window.innerWidth-370-n*28),y:Math.min(100+n*32,Math.max(0,window.innerHeight-400)),messages:[],draft:'',busy:false});
+  loadFloating(floating.value.at(-1));
+}
+async function loadFloating(w){
+  try{const d=await api('/api/conversations/'+w.id+'/messages');if(!floating.value.includes(w))return;w.messages=d.messages;if(!document.hidden)await markRead(w.id,d.messages)}catch{}
+}
+function startDrag(e,w){
+  if(e.button!==0||e.target.closest('button'))return;
+  const dx=e.clientX-w.x,dy=e.clientY-w.y,el=e.currentTarget;el.setPointerCapture(e.pointerId);
+  const move=v=>{w.x=Math.max(0,Math.min(window.innerWidth-100,v.clientX-dx));w.y=Math.max(0,Math.min(window.innerHeight-50,v.clientY-dy))};
+  const stop=()=>{el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',stop);el.removeEventListener('pointercancel',stop)};
+  el.addEventListener('pointermove',move);el.addEventListener('pointerup',stop);el.addEventListener('pointercancel',stop);
+}
+async function sendFloating(w){
+  const content=w.draft.trim();if(!content||w.busy)return;w.busy=true;
+  try{await api('/api/conversations/'+w.id+'/messages',{method:'POST',body:JSON.stringify({content})});w.draft='';await loadFloating(w)}catch(e){notify(e)}finally{w.busy=false}
+}
+async function markRead(id,rows){
+  const ids=rows.filter(m=>m.direction==='in').map(m=>m.id);
+  if(!ids.length)return;
+  await api('/api/conversations/'+id+'/read',{method:'POST',body:JSON.stringify({message_ids:ids})});
+}
+async function loadSources(id){
+  try{const d=await api('/api/conversations/'+id+'/knowledge');if(settings.value.id===id)sources.value=d.sources}catch(e){notify(e)}
+}
+async function addSource(){
+  const id=settings.value.id;if(!id)return;sourceBusy.value=true;
+  try{
+    if(pdfFile.value){const data=new FormData();data.append('file',pdfFile.value);await api('/api/conversations/'+id+'/knowledge',{method:'POST',body:data});pdfFile.value=null}
+    else{await api('/api/conversations/'+id+'/knowledge',{method:'POST',body:JSON.stringify(sourceForm.value)});sourceForm.value={kind:'text',title:'',content:''}}
+    await loadSources(id);
+  }catch(e){notify(e)}finally{sourceBusy.value=false}
+}
+async function removeSource(s){const id=settings.value.id;try{await api('/api/conversations/'+id+'/knowledge/'+s.id,{method:'DELETE'});await loadSources(id)}catch(e){notify(e)}}
+
 
 const filtered= computed(()=>conversations.value.filter(x=>(!activeAccount.value||x.account_id===activeAccount.value.id)&&`${x.title} ${x.jid}`.toLowerCase().includes(query.value.toLowerCase())));
 const statusLabel=s=>({connected:'Connecté',connecting:'Connexion...',qr:'Scanner le QR',disconnected:'Hors ligne'})[s]||s;
 const modeLabel=s=>({manual:'Manuel',ai:'IA autonome',hybrid:'Hybride'})[s]||s;
 
 async function api(path,opts={}){
-  const r=await fetch(API+path,{...opts,headers:{'Content-Type':'application/json',...(token.value?{'Authorization':'Bearer '+token.value}:{}),...(opts.headers||{})}});
+  const r=await fetch(API+path,{...opts,headers:{...(opts.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(token.value?{'Authorization':'Bearer '+token.value}:{}),...(opts.headers||{})}});
   let d={};
   try{d=await r.json()}catch{}
-  if(!r.ok)throw Error(d.error||`Erreur HTTP ${r.status}`);
+  if(!r.ok){const e=Error(d.error||`Erreur HTTP ${r.status}`);e.code=d.code;throw e;}
   return d;
 }
 
@@ -38,42 +91,48 @@ async function authenticate(){
   try{
     const path=authMode.value==='login'?'/api/auth/login':'/api/auth/register';
     const data=await api(path,{method:'POST',body:JSON.stringify(form.value)});
-    setAuth(data);
+    await setAuth(data);
   }catch(e){notify(e)}finally{busy.value=false}
 }
 
-function setAuth(data){
+async function setAuth(data){
   token.value=data.token;
   currentUser.value=data.user;
   localStorage.setItem('autochapp_token',data.token);
   localStorage.setItem('autochapp_user',JSON.stringify(data.user));
-  load();
+  await load();
 }
 
+const GOOGLE_ID=ref(import.meta.env.VITE_GOOGLE_CLIENT_ID||'');
+const googlePending=ref(''),googlePassword=ref('');
+let googleScript=null;
 async function googleCredential(response){
-  try{setAuth(await api('/api/auth/google',{method:'POST',body:JSON.stringify({credential:response.credential})}))}
-  catch(e){notify(e)}
+  busy.value=true;
+  try{await setAuth(await api('/api/auth/google',{method:'POST',body:JSON.stringify({credential:response.credential,password:googlePassword.value})}));googlePending.value='';googlePassword.value=''}
+  catch(e){if(e.code==='link_required')googlePending.value=response.credential;notify(e)}
+  finally{busy.value=false}
 }
-
-const GOOGLE_ID=import.meta.env.VITE_GOOGLE_CLIENT_ID||'';
-onMounted(()=>{
-  if(token.value)load();
-  if(GOOGLE_ID){
-    const s=document.createElement('script');
-    s.src='https://accounts.google.com/gsi/client';
-    s.async=true;
-    s.onload=()=>{
-      window.google.accounts.id.initialize({client_id:GOOGLE_ID,callback:googleCredential});
-      window.google.accounts.id.renderButton(document.querySelector('#google-signin'),{theme:'outline',size:'large',width:320});
-    };
-    document.head.appendChild(s);
+async function mountGoogle(){
+  if(token.value)return;
+  try{const cfg=await api('/api/auth/config');GOOGLE_ID.value=cfg.google_client_id||''}catch{}
+  if(!GOOGLE_ID.value)return;
+  await nextTick();
+  if(!window.google?.accounts?.id){
+    if(!googleScript)googleScript=new Promise((resolve,reject)=>{const s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';s.async=true;s.onload=resolve;s.onerror=reject;document.head.appendChild(s)});
+    try{await googleScript}catch{googleScript=null;return}
   }
-});
-onUnmounted(()=>clearInterval(poll));
+  const el=document.querySelector('#google-signin');if(!el||token.value)return;
+  el.innerHTML='';
+  window.google.accounts.id.initialize({client_id:GOOGLE_ID.value,callback:googleCredential});
+  window.google.accounts.id.renderButton(el,{theme:'outline',size:'large',width:Math.min(320,el.clientWidth||320)});
+}
+onMounted(()=>{typeStep();if(token.value)load();else mountGoogle()});
+watch(token,value=>{if(!value)mountGoogle()});
+onUnmounted(()=>{clearInterval(poll);clearTimeout(typeTimer)});
 
 function logout(){
   token.value='';currentUser.value=null;accounts.value=[];conversations.value=[];messages.value=[];
-  activeAccount.value=null;activeConversation.value=null;
+  activeAccount.value=null;activeConversation.value=null;opened.value=[];floating.value=[];drafts.value={};draft.value='';sources.value=[];googlePending.value='';googlePassword.value='';
   localStorage.removeItem('autochapp_token');localStorage.removeItem('autochapp_user');
   clearInterval(poll);
 }
@@ -83,7 +142,7 @@ async function load(){
     const [a,c]=await Promise.all([api('/api/accounts'),api('/api/conversations')]);
     accounts.value=a.accounts;
     conversations.value=c.conversations;
-    if(!activeAccount.value&&accounts.value.length)activeAccount.value=accounts.value[0];
+    // Keep the all-accounts view when no account is selected.
     if(activeAccount.value)activeAccount.value=accounts.value.find(x=>x.id===activeAccount.value.id)||accounts.value[0]||null;
     if(activeConversation.value){
       activeConversation.value=conversations.value.find(c=>c.id===activeConversation.value.id)||null;
@@ -113,6 +172,7 @@ async function refresh(){
       activeConversation.value=conversations.value.find(x=>x.id===activeConversation.value.id)||null;
       if(activeConversation.value)await loadMessages();
     }
+    await Promise.all(floating.value.map(loadFloating));
     if(qrData.value&&qrData.value.id){
       const s=await api(`/api/accounts/${qrData.value.id}/status`);
       qrData.value={...qrData.value,...s};
@@ -172,7 +232,11 @@ async function removeAccount(a){
 }
 
 async function selectConversation(c){
+  if(activeConversation.value)drafts.value[activeConversation.value.id]=draft.value;
+  if(!opened.value.includes(c.id))opened.value.push(c.id);
   activeConversation.value=c;
+  draft.value=drafts.value[c.id]||'';
+  messages.value=[];
   section.value='inbox';
   sidebarMobile.value=false;
   showSettings.value=false;
@@ -182,9 +246,12 @@ async function selectConversation(c){
 async function loadMessages(){
   if(!activeConversation.value)return;
   try{
-    const data=await api(`/api/conversations/${activeConversation.value.id}/messages`);
+    const id=activeConversation.value.id;
+    const data=await api('/api/conversations/'+id+'/messages');
+    if(activeConversation.value?.id!==id)return;
     const had=messages.value.length;
     messages.value=data.messages;
+    if(!document.hidden&&section.value==='inbox')await markRead(id,data.messages);
     if(messages.value.length!==had)nextTick(()=>bottom.value?.scrollIntoView({behavior:'smooth'}));
   }catch{}
 }
@@ -201,7 +268,7 @@ async function send(){
 }
 
 function openSettings(){
-  settings.value={...activeConversation.value};
+  settings.value={...activeConversation.value};sources.value=[];pdfFile.value=null;sourceForm.value={kind:'text',title:'',content:''};loadSources(settings.value.id);
   loadModels();
   showSettings.value=true;
 }
@@ -331,12 +398,12 @@ async function deleteModel(m){
           <span class="brand-icon"><MessageCircle :size="22" stroke-width="2.5"/></span> auto<span>chapp</span><span class="brand-dot">.</span>
         </div>
         <div class="eyebrow"><Sparkles :size="15"/> LA MESSAGERIE RÉINVENTÉE</div>
-        <h1>Une seule interface.<br><span>Toutes vos conversations.</span></h1>
+        <h1 class="typing-title">AutoChapp<span class="brand-dot">.</span><br><span class="typing-line">{{typed}}<i class="typing-cursor"></i></span></h1>
         <p>Unifiez vos comptes WhatsApp et laissez votre assistant IA prendre le relais, quand vous le décidez.</p>
         <div class="auth-features">
           <div><span><MessageCircle :size="17"/></span> Tous vos messages au même endroit</div>
           <div><span><Bot :size="17"/></span> Des réponses intelligentes et personnalisées (Groq & modèles personnalisés)</div>
-          <div><span><ShieldCheck :size="17"/></span> Simulation de saisie humaine anti-détection</div>
+          <div><span><ShieldCheck :size="17"/></span> Assistance IA et contrôle manuel</div>
         </div>
         <div class="auth-caption">Votre équipe, vos clients, votre rythme.</div>
       </div>
@@ -344,15 +411,17 @@ async function deleteModel(m){
         <div class="mini-logo"><span class="brand-icon"><MessageCircle :size="17"/></span> autochapp</div>
         <h2>{{authMode==='login'?'Bon retour parmi nous':'Créez votre espace'}}</h2>
         <p class="muted">{{authMode==='login'?'Connectez-vous pour retrouver vos conversations.':'Commencez à gérer vos messages plus intelligemment.'}}</p>
-        <form @submit.prevent="authenticate">
+        <form v-if="authMode==='login'" @submit.prevent="authenticate">
           <label v-if="authMode==='register'">Votre nom<input v-model="form.name" required placeholder="Ex. Didier Sofo" autocomplete="name"/></label>
           <label>Adresse e-mail<input v-model="form.email" required type="email" placeholder="vous@entreprise.com" autocomplete="email"/></label>
           <label>Mot de passe<input v-model="form.password" required type="password" minlength="8" placeholder="••••••••" :autocomplete="authMode==='login'?'current-password':'new-password'"/></label>
           <button class="btn primary auth-button" :disabled="busy">{{busy?'Chargement…':authMode==='login'?'Se connecter':'Créer mon compte'}} <ArrowRight :size="17"/></button>
         </form>
-        <div class="divider-word"><span>OU CONTINUER AVEC</span></div>
+        <div v-if="authMode==='login'" class="divider-word"><span>OU CONTINUER AVEC</span></div><p v-else class="muted">Créez votre espace avec une adresse vérifiée par Google.</p>
         <div v-if="GOOGLE_ID" id="google-signin" class="google-container"></div>
         <p v-else class="oauth-hint">Connexion Google disponible après configuration OAuth.</p>
+        <form v-if="googlePending" @submit.prevent="googleCredential({credential:googlePending})"><label>Mot de passe du compte existant<input v-model="googlePassword" type="password" required autocomplete="current-password"/></label><button class="btn primary full" :disabled="busy">Lier mon compte Google</button></form>
+        <div v-if="busy" class="auth-wait"><span class="spinner"></span> Connexion sécurisée…</div>
         <p class="switch-auth">{{authMode==='login'?'Vous êtes nouveau ?':'Déjà un compte ?'}} <button @click="authMode=authMode==='login'?'register':'login'">{{authMode==='login'?'Créer un compte':'Se connecter'}}</button></p>
         <div class="fineprint"><Lock :size="13"/> Authentification sécurisée</div>
       </div>
@@ -360,7 +429,7 @@ async function deleteModel(m){
   </div>
 
   <!-- MAIN APP LAYOUT -->
-  <div v-else class="app-layout">
+  <div v-else class="app-layout" :class="{'workspace-menu-open':sidebarMobile}">
     <!-- SIDEBAR -->
     <aside class="sidebar" :class="{'mobile-open':sidebarMobile}">
       <div class="side-brand">
@@ -422,7 +491,7 @@ async function deleteModel(m){
     <main class="workspace">
       <!-- TOP BAR -->
       <header class="topbar">
-        <button class="mobile-menu" @click="sidebarMobile=true"><Menu :size="22"/></button>
+        <button class="mobile-menu workspace-menu" @click="sidebarMobile=!sidebarMobile"><Menu :size="22"/></button>
         <div class="breadcrumb">
           Espace de travail <span>/</span> 
           <strong>{{section==='overview'?'Vue d’ensemble':section==='admin'?'Administration':'Messages'}}</strong>
@@ -668,9 +737,9 @@ async function deleteModel(m){
               <span class="contact-avatar">{{c.title[0]?.toUpperCase()||'?'}}</span>
               <span class="conv-info">
                 <strong>{{c.title}}</strong>
-                <small>{{c.jid.split('@')[0]}}</small>
+                <small>{{c.last_message||c.jid.split('@')[0]}}</small>
               </span>
-              <span class="mode-mini" :class="c.mode">{{c.mode==='manual'?'MOI':c.mode==='ai'?'IA':'MIX'}}</span>
+              <span class="conv-extra"><small v-if="c.last_message_at">{{new Date(c.last_message_at).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}}</small><span v-if="c.unread_count" class="unread-counter" :aria-label="c.unread_count+' non lus'">{{c.unread_count}}</span><span v-else class="mode-mini" :class="c.mode">{{c.mode==='manual'?'MOI':c.mode==='ai'?'IA':'MIX'}}</span></span>
             </button>
             <div v-if="!filtered.length" class="list-empty">
               <MessageCircle :size="33"/>
@@ -683,6 +752,7 @@ async function deleteModel(m){
 
         <!-- CHAT CONVERSATION VIEW -->
         <div class="chat-main" v-if="activeConversation">
+          <div class="chat-tabs"><div v-for="c in openChats" :key="c.id" class="chat-tab" :class="{active:c.id===activeConversation.id}"><button @click="selectConversation(c)">{{c.title}} <span v-if="c.unread_count" class="unread-counter">{{c.unread_count}}</span></button><button title="Fermer" @click="closeTab(c.id)"><X :size="14"/></button></div></div>
           <div class="chat-header">
             <span class="contact-avatar chat-contact">{{activeConversation.title[0]?.toUpperCase()}}</span>
             <div class="chat-header-info">
@@ -695,7 +765,7 @@ async function deleteModel(m){
               <UserRound v-else :size="15"/>
               {{modeLabel(activeConversation.mode)}}
             </span>
-            <button class="icon-circle" title="Paramètres de l'assistant pour ce contact" @click="openSettings"><Settings2 :size="19"/></button>
+            <button class="icon-circle" title="Ouvrir une fenêtre flottante" @click="floatChat(activeConversation)">↗</button><button class="icon-circle" title="Paramètres de l'assistant pour ce contact" @click="openSettings"><Settings2 :size="19"/></button>
           </div>
 
           <div class="chat-messages">
@@ -735,6 +805,12 @@ async function deleteModel(m){
         </div>
       </section>
     </main>
+  </div>
+
+  <div v-if="token" v-for="w in floating" :key="w.id" class="floating-chat" :style="{left:w.x+'px',top:w.y+'px'}">
+    <div class="floating-title" @pointerdown="startDrag($event,w)"><strong>{{w.title}}</strong><button title="Réduire / fermer" @click="floating=floating.filter(x=>x.id!==w.id)">−</button></div>
+    <div class="floating-messages"><div v-for="m in w.messages" :key="m.id" class="message-row" :class="m.direction"><div class="bubble">{{m.content}}</div></div></div>
+    <form class="floating-composer" @submit.prevent="sendFloating(w)"><input v-model="w.draft" placeholder="Message…"/><button :disabled="w.busy||!w.draft.trim()"><Send :size="16"/></button></form>
   </div>
 
   <!-- MODAL: ADD ACCOUNT -->
@@ -839,6 +915,17 @@ async function deleteModel(m){
             <textarea v-model="settings.instructions" rows="4" placeholder="Ex. Réponds poliment en français. Sois concis. Donne les informations de tarif pour nos services. Ne prends aucun engagement sans confirmation."></textarea>
           </label>
 
+          <div class="knowledge-panel">
+            <h3>Base de connaissances (facultative)</h3>
+            <p class="muted">Les extraits pertinents sont transmis au modèle IA. Les liens sont enregistrés comme références, sans exploration automatique.</p>
+            <div v-for="s in sources" :key="s.id" class="knowledge-source"><span><strong>{{s.title}}</strong><small>{{s.kind}} · {{s.preview}}</small></span><button title="Supprimer la source" @click="removeSource(s)"><Trash2 :size="16"/></button></div>
+            <label>Importer un catalogue PDF (5 Mo maximum)<input type="file" accept=".pdf,application/pdf" @change="pdfFile=$event.target.files[0]||null"/></label>
+            <button v-if="pdfFile" class="btn secondary full" :disabled="sourceBusy" @click="addSource">Importer le PDF</button>
+            <label>Type de source<select v-model="sourceForm.kind"><option value="text">Texte / catalogue</option><option value="link">Lien web</option><option value="phone">Numéro / contact</option><option value="image">Description d'une image</option></select></label>
+            <label>Titre<input v-model="sourceForm.title" placeholder="Ex. Catalogue de services"/></label>
+            <label>Information<textarea v-model="sourceForm.content" rows="3" placeholder="Texte, URL, numéro ou description de l'image"></textarea></label>
+            <button class="btn secondary full" :disabled="sourceBusy||!!pdfFile||!sourceForm.title.trim()||!sourceForm.content.trim()" @click="addSource">Ajouter la source</button>
+          </div>
           <template v-if="settings.mode==='hybrid'">
             <label>
               Déclencheur de réponse automatique

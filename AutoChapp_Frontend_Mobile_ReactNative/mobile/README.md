@@ -1,12 +1,17 @@
-# AutoChapp Mobile — React Native / Expo
-
-## Démarrage
-`npm install && npx expo start` (Expo Go ou émulateur Android). Par défaut l'API est `http://10.0.2.2:5888` pour l'émulateur Android. Sur téléphone physique, ouvrez **Profil > Adresse du backend** et utilisez `https://votre-domaine-api` (HTTPS public recommandé). Le backend par défaut n'expose que 127.0.0.1 : configurez un reverse proxy sécurisé pour l'accès distant.
-
-## APK
-`bash build-apk.sh` : build local via Expo prebuild et Gradle, nécessite Java 17, Android SDK, `ANDROID_HOME`, Gradle/network pour les premières dépendances. APK de sortie `dist/autochapp-release-unsigned.apk` si réussi ; configurez votre signature Android et vérifiez l'APK avant distribution. Alternative : `bash build-apk.sh --cloud` utilise Expo EAS Build, qui exige connexion à un compte Expo ; un lien APK est retourné par EAS. Le zip fourni ne contient pas d'APK précompilé.
-
-## Fonctionnalités
-Connexion/inscription JWT, comptes WhatsApp et QR, liste des conversations, envoi/réception texte, réglages IA/hybride par conversation, réglage de l'adresse API. L'authentification Google mobile native n'est pas implémentée (elle nécessite des identifiants Android OAuth et deep links propres à l'application). Scanner le QR sur un second appareil via WhatsApp Appareils connectés ; le téléphone ne peut pas scanner son propre écran.
-
-Ne pas exposer une API HTTP sans TLS en production ; `usesCleartextTraffic` est activé uniquement pour les essais réseau local. Pour un produit public, désactiver cette option et activer HTTPS.
+# AutoChapp Mobile (Android)
+React Native / Expo SDK 54. Utilise le backend de la branche feature/workspace-auth-rag.
+## Compiler sur Linux x86_64 sans Android Studio
+Prérequis : Node.js >= 20.19.4, JDK 17, curl, unzip, openssl, accès Internet, espace disque suffisant.
+```bash
+bash build-apk.sh --setup --api-url https://api.votre-domaine.cm
+```
+Le premier build installe le SDK après acceptation des licences, génère une clé de signature persistante, compile un APK autonome et vérifie sa signature. Les suivants peuvent omettre --setup. Sortie : dist/autochapp.apk.
+Pour un environnement de test HTTP isolé uniquement : --allow-http --api-url http://adresse:5888. Ne jamais utiliser HTTP pour des comptes réels sur Internet. Sans --api-url, configurer le serveur depuis l'écran de connexion. localhost du téléphone n'est pas le localhost du VPS.
+L'installation npm met à jour localement package-lock.json (le lockfile n'a pas été régénéré sur GitHub). Ne pas committer ces modifications non vérifiées. Conserver la clé et le fichier password dans ~/.config/autochapp/android et les sauvegarder de façon chiffrée ; la même clé est nécessaire pour mettre à jour l'application.
+## Google OAuth Android
+Le client Web est fourni par /api/auth/config. Dans le même projet Google Cloud, créer un client OAuth **Android** avec package com.autochapp.mobile et SHA-1 affiché par le script. Pour Google Play App Signing, enregistrer aussi le certificat de signature Play. Aucun secret client dans l'APK. Google Sign-In natif requiert un APK compilé, pas Expo Go. Les anciens utilisateurs gardent la connexion par mot de passe et peuvent lier leur compte en confirmant leur mot de passe.
+## Fonctions
+Conversations triées, badges non lus, aperçus, filtres, onglets, une mini-fenêtre déplaçable, menu, animation de connexion, QR sur un autre appareil, modes IA/hybride, sources de connaissances (PDF textuel 5 Mo, texte, lien, téléphone, description d'image).
+Pas de notification push Android en arrière-plan, pas de téléchargement automatique des pages web, pas d'analyse d'image ni OCR des scans. La mini-fenêtre reste interne à l'application.
+## Vérification
+Compilation Android et connexion Google/WhatsApp à valider sur le VPS et un appareil réel.

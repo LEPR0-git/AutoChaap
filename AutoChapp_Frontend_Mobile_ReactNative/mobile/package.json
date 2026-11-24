@@ -15,12 +15,15 @@
     "react": "19.1.0",
     "react-native": "0.81.5",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "expo-constants": "~17.0.0",
-    "react-native-safe-area-context": "~5.6.0"
+    "expo-constants": "~18.0.13",
+    "react-native-safe-area-context": "~5.6.0",
+    "expo-document-picker": "~14.0.8",
+    "expo-secure-store": "~15.0.8",
+    "@react-native-google-signin/google-signin": "16.1.5",
+    "expo-build-properties": "~1.0.10"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
-    "babel-preset-expo": "~54.0.0",
-    "expo-dev-client": "~6.0.0"
+    "babel-preset-expo": "~54.0.0"
   }
 }
