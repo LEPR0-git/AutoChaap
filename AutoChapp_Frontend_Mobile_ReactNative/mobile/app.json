@@ -1,1 +1,29 @@
-{"expo":{"name":"AutoChapp","slug":"autochapp","scheme":"autochapp","version":"1.0.0","orientation":"portrait","userInterfaceStyle":"light","android":{"package":"com.autochapp.mobile","versionCode":1,"usesCleartextTraffic":true},"plugins":[],"extra":{"apiUrl":"http://10.0.2.2:5888"}}}
+{
+  "expo": {
+    "name": "AutoChapp",
+    "slug": "autochapp",
+    "scheme": "autochapp",
+    "version": "1.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.autochapp.mobile",
+      "versionCode": 2
+    },
+    "plugins": [
+      "@react-native-google-signin/google-signin",
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": false
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "apiUrl": ""
+    }
+  }
+}
