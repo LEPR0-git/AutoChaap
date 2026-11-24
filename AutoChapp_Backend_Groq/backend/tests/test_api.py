@@ -58,3 +58,37 @@ def test_history_import(client,monkeypatch):
     msgs=client.get('/api/conversations/'+cid+'/messages',headers=h).json['messages']
     assert len(msgs)==3
     assert any(m['direction']=='out' and m['content']=='reponse' for m in msgs)
+
+def test_unread_recent_and_knowledge(client):
+    h=user(client);other=user(client,'other-workspace@example.org')
+    aid=client.post('/api/accounts',headers=h,json={'label':'Pro'}).json['account']['id']
+    hdr={'X-Bridge-Secret':'bridge-test'}
+    def event(jid,mid,text):
+        return client.post('/internal/events',headers=hdr,json={'type':'message','account_id':aid,'jid':jid,'message_id':mid,'text':text})
+    assert event('12345@lid','m1','Ancien').status_code==200
+    assert event('67890@lid','m2','Recent').status_code==200
+    rows=client.get('/api/conversations',headers=h).json['conversations']
+    assert rows[0]['jid']=='67890@lid'
+    cid=rows[0]['id']
+    assert rows[0]['unread_count']==1
+    assert rows[0]['last_message']=='Recent'
+    msgs=client.get('/api/conversations/'+cid+'/messages',headers=h).json['messages']
+    assert client.post('/api/conversations/'+cid+'/read',headers=other,json={'message_ids':[msgs[0]['id']]}).status_code==404
+    assert client.post('/api/conversations/'+cid+'/read',headers=h,json={'message_ids':[msgs[0]['id']]}).status_code==200
+    assert client.get('/api/conversations',headers=h).json['conversations'][0]['unread_count']==0
+    assert event('67890@lid','m3','Nouveau').status_code==200
+    assert client.get('/api/conversations',headers=h).json['conversations'][0]['unread_count']==1
+    url='/api/conversations/'+cid+'/knowledge'
+    assert client.post(url,headers=h,json={'kind':'text','title':'Tarifs','content':'Service A : 5000 FCFA'}).status_code==201
+    assert len(client.get(url,headers=h).json['sources'])==1
+    assert client.get(url,headers=other).status_code==404
+
+def test_google_identity(client,monkeypatch):
+    client.application.config['GOOGLE_CLIENT_ID']='test-client'
+    payload={'sub':'google-sub-1','email':'verified@example.org','email_verified':True,'name':'Verified'}
+    monkeypatch.setattr('google.oauth2.id_token.verify_oauth2_token',lambda *a,**k:payload)
+    result=client.post('/api/auth/google',json={'credential':'mock'})
+    assert result.status_code==200
+    assert result.json['user']['email']=='verified@example.org'
+    payload['email_verified']=False
+    assert client.post('/api/auth/google',json={'credential':'mock'}).status_code==401
