@@ -32,6 +32,7 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-https://api.groq.com/openai/v1}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
     depends_on:
       db: {condition: service_healthy}
     networks: [core]

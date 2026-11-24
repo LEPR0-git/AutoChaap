@@ -48,7 +48,18 @@ app.get('/sessions/:id/status',(req,res)=>{const s=sessions.get(req.params.id);r
 app.post('/sessions/:id/send',async(req,res)=>{const s=sessions.get(req.params.id);let {jid,text}=req.body||{};
  if(!s||s.status!=='connected')return res.status(503).json({error:'WhatsApp non connecté'});
  if(typeof text!=='string'||!text.trim()||text.length>10000||typeof jid!=='string'||!/^\d{5,20}@s\.whatsapp\.net$/.test(jid))return res.status(400).json({error:'JID ou texte invalide'});
- try{const msg=await s.sock.sendMessage(jid,{text});res.json({ok:true,messageId:req.params.id+':'+msg.key.id})}catch(e){res.status(502).json({error:'Échec envoi WhatsApp'})}
+ try{
+   try{
+     await s.sock.presenceSubscribe(jid);
+     await s.sock.sendPresenceUpdate('composing',jid);
+     const charDelay=35+Math.floor(Math.random()*25);
+     const typingTime=Math.min(Math.max(text.length*charDelay,800),7000);
+     await new Promise(r=>setTimeout(r,typingTime));
+     await s.sock.sendPresenceUpdate('paused',jid);
+   }catch(err){console.warn('Presence update warning:',err.message)}
+   const msg=await s.sock.sendMessage(jid,{text});
+   res.json({ok:true,messageId:req.params.id+':'+msg.key.id});
+ }catch(e){res.status(502).json({error:'Échec envoi WhatsApp'})}
 });
 app.delete('/sessions/:id',async(req,res)=>{const s=sessions.get(req.params.id);sessions.delete(req.params.id);try{if(s?.sock)await s.sock.logout()}catch{}if(idOk(req.params.id))await fs.rm(path.join(root,req.params.id),{recursive:true,force:true});res.json({ok:true})});
 await fs.mkdir(root,{recursive:true});

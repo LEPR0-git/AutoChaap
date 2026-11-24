@@ -1,0 +1,1 @@
+{"expo":{"name":"AutoChapp Admin","slug":"autochapp-admin","scheme":"autochapp-admin","version":"1.0.0","orientation":"portrait","userInterfaceStyle":"light","android":{"package":"com.autochapp.admin","versionCode":1,"usesCleartextTraffic":true},"plugins":[],"extra":{"apiUrl":"http://37.60.250.220:5888"}}}

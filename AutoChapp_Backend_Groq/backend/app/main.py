@@ -17,7 +17,19 @@ class User(db.Model):
     name=db.Column(db.String(100),nullable=False)
     email=db.Column(db.String(255),unique=True,nullable=False,index=True)
     password_hash=db.Column(db.String(300),nullable=True)
+    role=db.Column(db.String(20),default='user')
     created_at=db.Column(db.DateTime(timezone=True),default=now)
+
+class AIModel(db.Model):
+    id=db.Column(db.String(36),primary_key=True,default=identifier)
+    name=db.Column(db.String(100),nullable=False)
+    model_id=db.Column(db.String(200),nullable=False)
+    base_url=db.Column(db.String(500),nullable=False)
+    api_key=db.Column(db.String(500),nullable=False)
+    is_default=db.Column(db.Boolean,default=False)
+    enabled=db.Column(db.Boolean,default=True)
+    created_at=db.Column(db.DateTime(timezone=True),default=now)
+
 class Account(db.Model):
     id=db.Column(db.String(36),primary_key=True,default=identifier)
     user_id=db.Column(db.String(36),db.ForeignKey('user.id'),nullable=False,index=True)
@@ -25,6 +37,7 @@ class Account(db.Model):
     phone=db.Column(db.String(50))
     status=db.Column(db.String(30),default='disconnected')
     created_at=db.Column(db.DateTime(timezone=True),default=now)
+
 class Conversation(db.Model):
     id=db.Column(db.String(36),primary_key=True,default=identifier)
     account_id=db.Column(db.String(36),db.ForeignKey('account.id'),nullable=False,index=True)
@@ -36,8 +49,10 @@ class Conversation(db.Model):
     keywords=db.Column(db.Text,default='')
     business_hours=db.Column(db.String(50),default='09:00-18:00')
     cooldown_seconds=db.Column(db.Integer,default=60)
+    ai_model_id=db.Column(db.String(36),db.ForeignKey('ai_model.id'),nullable=True)
     last_auto_at=db.Column(db.DateTime(timezone=True))
     __table_args__=(UniqueConstraint('account_id','jid',name='uq_conversation_account_jid'),)
+
 class Message(db.Model):
     id=db.Column(db.String(36),primary_key=True,default=identifier)
     conversation_id=db.Column(db.String(36),db.ForeignKey('conversation.id'),nullable=False,index=True)
@@ -47,9 +62,13 @@ class Message(db.Model):
     sender=db.Column(db.String(12),nullable=False,default='contact')
     created_at=db.Column(db.DateTime(timezone=True),default=now,index=True)
 
-def serialize_account(a): return dict(id=a.id,label=a.label,phone=a.phone,status=a.status)
-def serialize_conversation(c): return dict(id=c.id,account_id=c.account_id,jid=c.jid,title=c.title,mode=c.mode,instructions=c.instructions or '',hybrid_rule=c.hybrid_rule,keywords=c.keywords or '',business_hours=c.business_hours,cooldown_seconds=c.cooldown_seconds)
+def serialize_account(a): return dict(id=a.id,label=a.label,phone=a.phone,status=a.status,created_at=a.created_at.isoformat() if a.created_at else None)
+def serialize_conversation(c): return dict(id=c.id,account_id=c.account_id,jid=c.jid,title=c.title,mode=c.mode,instructions=c.instructions or '',hybrid_rule=c.hybrid_rule,keywords=c.keywords or '',business_hours=c.business_hours,cooldown_seconds=c.cooldown_seconds,ai_model_id=c.ai_model_id)
 def serialize_message(m): return dict(id=m.id,conversation_id=m.conversation_id,content=m.content,direction=m.direction,sender=m.sender,created_at=m.created_at.isoformat() if m.created_at else None)
+def serialize_ai_model(m,admin=False):
+    d=dict(id=m.id,name=m.name,model_id=m.model_id,is_default=m.is_default,enabled=m.enabled)
+    if admin: d.update(base_url=m.base_url,api_key=m.api_key)
+    return d
 
 def get_db_uri():
     raw = os.getenv('DATABASE_URL', '').strip()
@@ -87,6 +106,32 @@ def create_app(test_config=None):
             db.create_all()
         except Exception:
             pass
+        try:
+            db.session.execute(db.text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT \'user\';'))
+            db.session.execute(db.text('ALTER TABLE "conversation" ADD COLUMN IF NOT EXISTS ai_model_id VARCHAR(36);'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        try:
+            if not AIModel.query.first():
+                default_model = AIModel(
+                    name='Groq Llama 3.3 (défaut)' if 'groq' in app.config['AI_BASE_URL'].lower() else 'OpenAI (défaut)',
+                    model_id=app.config['AI_MODEL'],
+                    base_url=app.config['AI_BASE_URL'],
+                    api_key=app.config['AI_API_KEY'] or 'not-set',
+                    is_default=True,
+                    enabled=True
+                )
+                db.session.add(default_model)
+                db.session.commit()
+            admin_email = os.getenv('ADMIN_EMAIL','').strip().lower()
+            if admin_email:
+                u = User.query.filter_by(email=admin_email).first()
+                if u and u.role != 'admin':
+                    u.role = 'admin'
+                    db.session.commit()
+        except Exception:
+            db.session.rollback()
     @app.errorhandler(400)
     def bad_request(e): return jsonify(error='Requête invalide'),400
     @app.errorhandler(404)
@@ -104,6 +149,17 @@ def create_app(test_config=None):
             except Exception: return jsonify(error='Authentification requise'),401
             return f(*args,**kwargs)
         return wrapped
+    def admin_required(f):
+        @functools.wraps(f)
+        def wrapped(*args,**kwargs):
+            token=request.headers.get('Authorization','').removeprefix('Bearer ').strip()
+            try:
+                data=jwt.decode(token,app.config['JWT_SECRET'],algorithms=['HS256'])
+                g.user=db.session.get(User,data['sub'])
+                if not g.user or (g.user.role or 'user')!='admin': raise ValueError()
+            except Exception: return jsonify(error='Accès administrateur requis'),403
+            return f(*args,**kwargs)
+        return wrapped
     def owned_account(account_id): return Account.query.filter_by(id=account_id,user_id=g.user.id).first()
     def owned_conversation(conv_id):
         return db.session.query(Conversation).join(Account).filter(Conversation.id==conv_id,Account.user_id==g.user.id).first()
@@ -113,7 +169,7 @@ def create_app(test_config=None):
             return r.json(),r.status_code
         except (requests.RequestException,ValueError): return {'error':'Connecteur WhatsApp indisponible'},503
     def jwt_user(u): return jwt.encode({'sub':u.id,'exp':now()+datetime.timedelta(days=1)},app.config['JWT_SECRET'],algorithm='HS256')
-    def user_json(u): return {'id':u.id,'name':u.name,'email':u.email}
+    def user_json(u): return {'id':u.id,'name':u.name,'email':u.email,'role':u.role or 'user'}
     @app.get('/health')
     def health(): return jsonify(status='ok')
     @app.post('/api/auth/register')
@@ -121,7 +177,8 @@ def create_app(test_config=None):
         d=request.get_json(silent=True) or {}; email=str(d.get('email','')).strip().lower(); password=str(d.get('password','')); name=str(d.get('name','')).strip()
         if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email) or len(password)<8 or not name: return jsonify(error='Nom, e-mail valide et mot de passe de 8 caractères minimum requis'),400
         if User.query.filter_by(email=email).first(): return jsonify(error='E-mail déjà utilisé'),409
-        u=User(name=name,email=email,password_hash=generate_password_hash(password)); db.session.add(u); db.session.commit()
+        role = 'admin' if (os.getenv('ADMIN_EMAIL') and email == os.getenv('ADMIN_EMAIL').strip().lower()) else 'user'
+        u=User(name=name,email=email,password_hash=generate_password_hash(password),role=role); db.session.add(u); db.session.commit()
         return jsonify(token=jwt_user(u),user=user_json(u)),201
     @app.post('/api/auth/login')
     def login():
@@ -139,7 +196,9 @@ def create_app(test_config=None):
             if not payload.get('email_verified'): raise ValueError('Unverified email')
         except Exception: return jsonify(error='Token Google invalide'),401
         email=payload['email'].lower(); u=User.query.filter_by(email=email).first()
-        if not u: u=User(name=payload.get('name',email.split('@')[0]),email=email); db.session.add(u); db.session.commit()
+        if not u:
+            role = 'admin' if (os.getenv('ADMIN_EMAIL') and email == os.getenv('ADMIN_EMAIL').strip().lower()) else 'user'
+            u=User(name=payload.get('name',email.split('@')[0]),email=email,role=role); db.session.add(u); db.session.commit()
         return jsonify(token=jwt_user(u),user=user_json(u))
     @app.get('/api/me')
     @auth
@@ -150,6 +209,8 @@ def create_app(test_config=None):
         if request.method=='GET': return jsonify(accounts=[serialize_account(a) for a in Account.query.filter_by(user_id=g.user.id).order_by(Account.created_at.desc()).all()])
         d=request.get_json(silent=True) or {}; label=str(d.get('label','')).strip()[:120]
         if not label: return jsonify(error='Nom du compte requis'),400
+        if Account.query.filter_by(user_id=g.user.id,label=label).first():
+            return jsonify(error='Un compte avec ce nom existe déjà'),409
         a=Account(user_id=g.user.id,label=label); db.session.add(a); db.session.commit(); return jsonify(account=serialize_account(a)),201
     @app.get('/api/accounts/<account_id>/qr')
     @auth
@@ -172,7 +233,8 @@ def create_app(test_config=None):
     def delete_account(account_id):
         a=owned_account(account_id)
         if not a:return jsonify(error='Compte introuvable'),404
-        bridge_call('DELETE',f'/sessions/{account_id}')
+        try: bridge_call('DELETE',f'/sessions/{account_id}')
+        except Exception: pass
         for c in Conversation.query.filter_by(account_id=a.id).all():
             Message.query.filter_by(conversation_id=c.id).delete();db.session.delete(c)
         db.session.delete(a);db.session.commit();return jsonify(ok=True)
@@ -194,6 +256,13 @@ def create_app(test_config=None):
         c.mode=mode;c.hybrid_rule=rule;c.instructions=str(d.get('instructions',c.instructions))[:4000];c.keywords=str(d.get('keywords',c.keywords))[:500];c.business_hours=str(d.get('business_hours',c.business_hours))[:50]
         try:c.cooldown_seconds=max(0,min(86400,int(d.get('cooldown_seconds',c.cooldown_seconds))))
         except (TypeError,ValueError):return jsonify(error='Délai invalide'),400
+        if 'ai_model_id' in d:
+            mid=d.get('ai_model_id')
+            if not mid:
+                c.ai_model_id=None
+            else:
+                m_obj=AIModel.query.filter_by(id=str(mid),enabled=True).first()
+                if m_obj: c.ai_model_id=m_obj.id
         db.session.commit();return jsonify(conversation=serialize_conversation(c))
     @app.get('/api/conversations/<cid>/messages')
     @auth
@@ -221,16 +290,29 @@ def create_app(test_config=None):
         if c.hybrid_rule=='outside_hours':
             try:
                 start,end=c.business_hours.split('-'); hm=now().strftime('%H:%M')
-                return not(start<=hm<end)  # timezone UTC; set local policy to UTC or extend per-account TZ
+                return not(start<=hm<end)
             except Exception:return False
         return False
     def ai_response(c):
-        if not app.config['AI_API_KEY']:return None
+        ai_model = None
+        if c.ai_model_id:
+            ai_model = db.session.get(AIModel, c.ai_model_id)
+        if not ai_model or not ai_model.enabled:
+            ai_model = AIModel.query.filter_by(is_default=True, enabled=True).first()
+        if ai_model and ai_model.api_key and ai_model.api_key != 'not-set':
+            base_url = ai_model.base_url
+            api_key = ai_model.api_key
+            model_id = ai_model.model_id
+        else:
+            base_url = app.config['AI_BASE_URL']
+            api_key = app.config['AI_API_KEY']
+            model_id = app.config['AI_MODEL']
+        if not api_key or api_key == 'not-set': return None
         history=Message.query.filter_by(conversation_id=c.id).order_by(Message.created_at.desc()).limit(12).all()
         msgs=[{'role':'system','content':'Tu es un assistant WhatsApp répondant au nom du propriétaire. Ne fabrique pas des informations. Instructions du propriétaire : '+(c.instructions or 'Sois clair et poli.')}]
         msgs.extend({'role':'assistant' if m.direction=='out' else 'user','content':m.content} for m in reversed(history))
         try:
-            r=requests.post(app.config['AI_BASE_URL'].rstrip('/')+'/chat/completions',headers={'Authorization':'Bearer '+app.config['AI_API_KEY']},json={'model':app.config['AI_MODEL'],'messages':msgs,'temperature':0.5,'max_tokens':350},timeout=20)
+            r=requests.post(base_url.rstrip('/')+'/chat/completions',headers={'Authorization':'Bearer '+api_key},json={'model':model_id,'messages':msgs,'temperature':0.5,'max_tokens':350},timeout=20)
             r.raise_for_status();return r.json()['choices'][0]['message']['content'].strip()[:5000]
         except (requests.RequestException,KeyError,IndexError,TypeError):app.logger.exception('AI provider unavailable');return None
     @app.post('/internal/events')
@@ -254,4 +336,142 @@ def create_app(test_config=None):
                 if status==200:
                     db.session.add(Message(conversation_id=c.id,content=reply,direction='out',sender='ai',external_id=data.get('messageId') or identifier()));c.last_auto_at=now();db.session.commit()
         return jsonify(ok=True,conversation_id=c.id)
+
+    # ---- USER AI MODELS ----
+    @app.get('/api/models')
+    @auth
+    def user_list_models():
+        models = AIModel.query.filter_by(enabled=True).order_by(AIModel.name).all()
+        return jsonify(models=[serialize_ai_model(m, admin=False) for m in models])
+
+    # ---- ADMIN ROUTES ----
+    @app.get('/api/admin/stats')
+    @admin_required
+    def admin_stats():
+        return jsonify(
+            users=User.query.count(),
+            accounts=Account.query.count(),
+            connected_accounts=Account.query.filter_by(status='connected').count(),
+            conversations=Conversation.query.count(),
+            messages=Message.query.count()
+        )
+
+    @app.get('/api/admin/users')
+    @admin_required
+    def admin_users():
+        users = User.query.order_by(User.created_at.desc()).all()
+        res = []
+        for u in users:
+            acct_count = Account.query.filter_by(user_id=u.id).count()
+            conv_count = db.session.query(Conversation).join(Account).filter(Account.user_id==u.id).count()
+            res.append(dict(
+                id=u.id,
+                name=u.name,
+                email=u.email,
+                role=u.role or 'user',
+                created_at=u.created_at.isoformat() if u.created_at else None,
+                accounts_count=acct_count,
+                conversations_count=conv_count
+            ))
+        return jsonify(users=res)
+
+    @app.delete('/api/admin/users/<uid>')
+    @admin_required
+    def admin_delete_user(uid):
+        u = db.session.get(User, uid)
+        if not u: return jsonify(error='Utilisateur introuvable'), 404
+        if u.id == g.user.id: return jsonify(error='Impossible de supprimer votre propre compte admin'), 400
+        for a in Account.query.filter_by(user_id=u.id).all():
+            try: bridge_call('DELETE', f'/sessions/{a.id}')
+            except Exception: pass
+            for c in Conversation.query.filter_by(account_id=a.id).all():
+                Message.query.filter_by(conversation_id=c.id).delete()
+                db.session.delete(c)
+            db.session.delete(a)
+        db.session.delete(u)
+        db.session.commit()
+        return jsonify(ok=True)
+
+    @app.patch('/api/admin/users/<uid>/role')
+    @admin_required
+    def admin_toggle_role(uid):
+        u = db.session.get(User, uid)
+        if not u: return jsonify(error='Utilisateur introuvable'), 404
+        d = request.get_json(silent=True) or {}
+        new_role = d.get('role')
+        if new_role not in ('admin', 'user'): return jsonify(error='Rôle invalide'), 400
+        if u.id == g.user.id and new_role != 'admin':
+            return jsonify(error='Impossible de révoquer vos propres droits admin'), 400
+        u.role = new_role
+        db.session.commit()
+        return jsonify(user=user_json(u))
+
+    @app.get('/api/admin/users/<uid>/activity')
+    @admin_required
+    def admin_user_activity(uid):
+        u = db.session.get(User, uid)
+        if not u: return jsonify(error='Utilisateur introuvable'), 404
+        accts = Account.query.filter_by(user_id=u.id).order_by(Account.created_at.desc()).all()
+        acct_list = []
+        for a in accts:
+            convs = Conversation.query.filter_by(account_id=a.id).all()
+            conv_list = []
+            for c in convs:
+                msg_count = Message.query.filter_by(conversation_id=c.id).count()
+                conv_list.append(dict(id=c.id, jid=c.jid, title=c.title, mode=c.mode, messages_count=msg_count))
+            acct_list.append(dict(id=a.id, label=a.label, phone=a.phone, status=a.status, conversations=conv_list))
+        return jsonify(user=user_json(u), accounts=acct_list)
+
+    @app.get('/api/admin/models')
+    @admin_required
+    def admin_list_models():
+        models = AIModel.query.order_by(AIModel.created_at.asc()).all()
+        return jsonify(models=[serialize_ai_model(m, admin=True) for m in models])
+
+    @app.post('/api/admin/models')
+    @admin_required
+    def admin_add_model():
+        d = request.get_json(silent=True) or {}
+        name = str(d.get('name', '')).strip()
+        model_id = str(d.get('model_id', '')).strip()
+        base_url = str(d.get('base_url', '')).strip()
+        api_key = str(d.get('api_key', '')).strip()
+        is_default = bool(d.get('is_default', False))
+        if not name or not model_id or not base_url or not api_key:
+            return jsonify(error='Nom, ID du modèle, Base URL et Clé API requis'), 400
+        if is_default:
+            AIModel.query.update({AIModel.is_default: False})
+        m = AIModel(name=name, model_id=model_id, base_url=base_url, api_key=api_key, is_default=is_default, enabled=True)
+        db.session.add(m)
+        db.session.commit()
+        return jsonify(model=serialize_ai_model(m, admin=True)), 201
+
+    @app.patch('/api/admin/models/<mid>')
+    @admin_required
+    def admin_update_model(mid):
+        m = db.session.get(AIModel, mid)
+        if not m: return jsonify(error='Modèle introuvable'), 404
+        d = request.get_json(silent=True) or {}
+        if 'name' in d and str(d['name']).strip(): m.name = str(d['name']).strip()[:100]
+        if 'model_id' in d and str(d['model_id']).strip(): m.model_id = str(d['model_id']).strip()[:200]
+        if 'base_url' in d and str(d['base_url']).strip(): m.base_url = str(d['base_url']).strip()[:500]
+        if 'api_key' in d and str(d['api_key']).strip(): m.api_key = str(d['api_key']).strip()[:500]
+        if 'enabled' in d: m.enabled = bool(d['enabled'])
+        if d.get('is_default'):
+            AIModel.query.filter(AIModel.id != m.id).update({AIModel.is_default: False})
+            m.is_default = True
+        db.session.commit()
+        return jsonify(model=serialize_ai_model(m, admin=True))
+
+    @app.delete('/api/admin/models/<mid>')
+    @admin_required
+    def admin_delete_model(mid):
+        m = db.session.get(AIModel, mid)
+        if not m: return jsonify(error='Modèle introuvable'), 404
+        if m.is_default: return jsonify(error='Impossible de supprimer le modèle par défaut'), 400
+        Conversation.query.filter_by(ai_model_id=m.id).update({Conversation.ai_model_id: None})
+        db.session.delete(m)
+        db.session.commit()
+        return jsonify(ok=True)
+
     return app
