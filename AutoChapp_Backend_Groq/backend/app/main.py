@@ -43,6 +43,7 @@ class Conversation(db.Model):
     account_id=db.Column(db.String(36),db.ForeignKey('account.id'),nullable=False,index=True)
     jid=db.Column(db.String(150),nullable=False)
     title=db.Column(db.String(150),nullable=False)
+    avatar_url=db.Column(db.String(1000),nullable=True)
     mode=db.Column(db.String(12),nullable=False,default='manual')
     instructions=db.Column(db.Text,default='')
     hybrid_rule=db.Column(db.String(30),default='keywords')
@@ -63,7 +64,7 @@ class Message(db.Model):
     created_at=db.Column(db.DateTime(timezone=True),default=now,index=True)
 
 def serialize_account(a): return dict(id=a.id,label=a.label,phone=a.phone,status=a.status,created_at=a.created_at.isoformat() if a.created_at else None)
-def serialize_conversation(c): return dict(id=c.id,account_id=c.account_id,jid=c.jid,title=c.title,mode=c.mode,instructions=c.instructions or '',hybrid_rule=c.hybrid_rule,keywords=c.keywords or '',business_hours=c.business_hours,cooldown_seconds=c.cooldown_seconds,ai_model_id=c.ai_model_id)
+def serialize_conversation(c): return dict(id=c.id,account_id=c.account_id,jid=c.jid,title=c.title,avatar_url=c.avatar_url,mode=c.mode,instructions=c.instructions or '',hybrid_rule=c.hybrid_rule,keywords=c.keywords or '',business_hours=c.business_hours,cooldown_seconds=c.cooldown_seconds,ai_model_id=c.ai_model_id)
 def serialize_message(m): return dict(id=m.id,conversation_id=m.conversation_id,content=m.content,direction=m.direction,sender=m.sender,created_at=m.created_at.isoformat() if m.created_at else None)
 def serialize_ai_model(m,admin=False):
     d=dict(id=m.id,name=m.name,model_id=m.model_id,is_default=m.is_default,enabled=m.enabled)
@@ -109,6 +110,7 @@ def create_app(test_config=None):
         try:
             db.session.execute(db.text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT \'user\';'))
             db.session.execute(db.text('ALTER TABLE "conversation" ADD COLUMN IF NOT EXISTS ai_model_id VARCHAR(36);'))
+            db.session.execute(db.text('ALTER TABLE "conversation" ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(1000);'))
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -233,11 +235,14 @@ def create_app(test_config=None):
     def delete_account(account_id):
         a=owned_account(account_id)
         if not a:return jsonify(error='Compte introuvable'),404
-        try: bridge_call('DELETE',f'/sessions/{account_id}')
-        except Exception: pass
+        _,bridge_status=bridge_call('DELETE',f'/sessions/{account_id}')
         for c in Conversation.query.filter_by(account_id=a.id).all():
             Message.query.filter_by(conversation_id=c.id).delete();db.session.delete(c)
-        db.session.delete(a);db.session.commit();return jsonify(ok=True)
+        db.session.delete(a);db.session.commit()
+        response={'ok':True}
+        if bridge_status!=200:
+            response['warning']='Compte retiré d’AutoChapp, mais nettoyage de la session WhatsApp à vérifier lorsque le connecteur sera disponible.'
+        return jsonify(response)
     @app.get('/api/conversations')
     @auth
     def conversations():
@@ -327,6 +332,12 @@ def create_app(test_config=None):
         if ext and Message.query.filter_by(external_id=ext).first():return jsonify(duplicate=True)
         jid=str(d['jid'])[:150];c=Conversation.query.filter_by(account_id=aid,jid=jid).first()
         if not c:c=Conversation(account_id=aid,jid=jid,title=str(d.get('title') or jid)[:150]);db.session.add(c);db.session.flush()
+        title=str(d.get('title') or '').strip()
+        if title and title != jid and not re.fullmatch(r'\+?\d[\d\s().-]*', title) and (not c.title or c.title == c.jid):
+            c.title=title[:150]
+        avatar_url=str(d.get('avatar_url') or '')
+        if avatar_url.startswith('https://') and len(avatar_url)<=1000:
+            c.avatar_url=avatar_url
         m=Message(conversation_id=c.id,external_id=ext or None,content=str(d['text'])[:10000],direction='in',sender='contact');db.session.add(m);db.session.commit()
         should_reply=c.mode=='ai' or(c.mode=='hybrid' and hybrid_enabled(c,m.content))
         if should_reply and (not c.last_auto_at or (now()-c.last_auto_at.replace(tzinfo=datetime.timezone.utc) if c.last_auto_at.tzinfo is None else now()-c.last_auto_at).total_seconds()>=c.cooldown_seconds):

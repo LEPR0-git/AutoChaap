@@ -102,3 +102,87 @@
   .models-grid{grid-template-columns:1fr}
   .admin-tabs{flex-wrap:wrap}
 }
+
+
+/* AutoChapp 2026-11-26: fixed-size chat windows and vertical opened-chat rail */
+.chat-floating-window{
+  position:fixed !important;
+  right:20px !important;
+  bottom:14px !important;
+  top:auto !important;
+  left:auto !important;
+  width:min(410px,calc(100vw - 32px)) !important;
+  height:min(620px,calc(100dvh - 105px)) !important;
+  max-height:calc(100dvh - 50px);
+  min-height:0 !important;
+  z-index:35;
+  flex:none !important;
+  border:1px solid #dbe9e5;
+  border-radius:17px;
+  box-shadow:0 20px 65px #152d3940;
+  overflow:hidden;
+  background:#fff;
+}
+.chat-floating-window .chat-header{height:70px;min-height:70px;padding:0 12px;gap:9px}
+.chat-floating-window .chat-header-info{min-width:0;display:flex;flex-direction:column}
+.chat-floating-window .contact-ident{display:flex;align-items:baseline;gap:8px;min-width:0;flex-wrap:wrap}
+.chat-floating-window .contact-ident strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:170px}
+.chat-floating-window .contact-ident small{white-space:nowrap;color:#778c99;font-size:10px}
+.chat-floating-window .mode-pill{padding:7px;font-size:10px}
+.chat-floating-window .chat-messages{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:14px}
+.chat-floating-window .composer{flex-shrink:0;padding:10px 12px}
+.chat-floating-window .composer-hint,.chat-floating-window .composer-footnote{font-size:9px;line-height:1.3}
+.floating-chat-rail{
+  position:fixed;
+  bottom:16px;
+  right:445px;
+  z-index:34;
+  width:205px;
+  max-height:calc(100dvh - 105px);
+  overflow-y:auto;
+  display:flex;
+  flex-direction:column;
+  align-items:stretch;
+  gap:7px;
+  overscroll-behavior:contain;
+}
+.floating-chat-tab{display:flex;align-items:center;gap:4px;min-height:47px;padding:3px 5px;border:1px solid #dfece7;background:#fff;border-radius:12px;box-shadow:0 4px 18px #102a3320}
+.floating-chat-tab.selected{border-color:#16b38b;background:#e9faf3}
+.floating-chat-select{display:flex;align-items:center;gap:8px;flex:1;min-width:0;text-align:left}
+.floating-chat-select .contact-avatar{width:33px;height:33px;border-radius:50%;font-size:13px}
+.floating-chat-tab-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:700}
+.floating-chat-close{width:26px;height:26px;display:grid;place-items:center;border-radius:7px;flex-shrink:0;color:#73838a}
+.floating-chat-close:hover{background:#fee8e8;color:#bb4242}
+.contact-avatar{position:relative;overflow:hidden}
+.contact-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+.auth-page{height:100dvh;min-height:0;overflow:hidden;padding:clamp(10px,3vh,34px)}
+.auth-wrap{min-height:0;max-height:100%;gap:clamp(18px,5vw,75px)}
+.auth-left{min-height:0;max-height:100%;overflow:hidden}
+.auth-card{max-height:calc(100dvh - 30px);overflow-y:auto;overscroll-behavior:contain}
+.brand-auth{margin-bottom:clamp(22px,7vh,95px)}
+.auth-features{margin-top:clamp(15px,4vh,42px)}
+.auth-caption{margin-top:clamp(15px,6vh,75px)}
+@media(max-width:1180px){
+  .floating-chat-rail{width:58px;right:440px}
+  .floating-chat-tab-name{display:none}
+  .floating-chat-tab{padding:4px;flex-direction:column}
+  .floating-chat-close{width:24px;height:20px}
+}
+@media(max-width:760px){
+  .chat-floating-window{right:8px !important;bottom:8px !important;width:calc(100vw - 16px) !important;height:calc(100dvh - 85px) !important;max-height:calc(100dvh - 20px)}
+  .floating-chat-rail{top:72px;bottom:auto;right:10px;width:45px;max-height:calc(100dvh - 100px)}
+  .floating-chat-tab{min-height:40px;box-shadow:0 3px 12px #0002}
+  .floating-chat-select .contact-avatar{width:28px;height:28px}
+  .floating-chat-close{height:16px}
+  .auth-card{padding:clamp(16px,3vh,30px) 22px}
+  .auth-card .mini-logo{margin-bottom:clamp(14px,3vh,30px)}
+  .auth-card label{margin-bottom:clamp(10px,2vh,18px)}
+}
+@media(max-height:650px){
+  .auth-card{padding:18px 26px}
+  .auth-card .mini-logo{margin-bottom:12px}
+  .auth-card label{margin-bottom:9px}
+  .auth-card .divider-word{margin:12px 0}
+  .auth-card .switch-auth{margin:13px 0}
+  .auth-card .fineprint{padding-top:10px}
+}

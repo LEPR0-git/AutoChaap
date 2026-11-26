@@ -11,6 +11,25 @@ const accounts=ref([]),conversations=ref([]),messages=ref([]),activeAccount=ref(
 const aiModels=ref([]);
 const adminTab=ref('stats'),adminStats=ref(null),adminUsers=ref([]),adminModels=ref([]),adminActivityUser=ref(null),adminActivityData=ref([]),showModelModal=ref(false),modelForm=ref({id:null,name:'',model_id:'',base_url:'',api_key:'',is_default:false});
 let poll=null;
+const openChats=ref([]);
+function contactPhone(c){
+  const match=String(c?.jid||'').match(/^(\d{5,20})@s\.whatsapp\.net$/);
+  return match ? '+'+match[1] : '';
+}
+function contactName(c){
+  if(!c)return 'Numéro inconnu';
+  const name=String(c.title||'').trim();
+  if(!name||name===c.jid||/^(?:\+?\d[\d\s().-]*|\d+@.+)$/.test(name))return 'Numéro inconnu';
+  return name;
+}
+function closeChat(id){
+  openChats.value=openChats.value.filter(c=>c.id!==id);
+  if(activeConversation.value?.id===id){
+    activeConversation.value=openChats.value.at(-1)||null;
+    messages.value=[];
+    if(activeConversation.value)loadMessages();
+  }
+}
 
 const filtered= computed(()=>conversations.value.filter(x=>(!activeAccount.value||x.account_id===activeAccount.value.id)&&`${x.title} ${x.jid}`.toLowerCase().includes(query.value.toLowerCase())));
 const statusLabel=s=>({connected:'Connecté',connecting:'Connexion...',qr:'Scanner le QR',disconnected:'Hors ligne'})[s]||s;
@@ -73,7 +92,7 @@ onUnmounted(()=>clearInterval(poll));
 
 function logout(){
   token.value='';currentUser.value=null;accounts.value=[];conversations.value=[];messages.value=[];
-  activeAccount.value=null;activeConversation.value=null;
+  activeAccount.value=null;activeConversation.value=null;openChats.value=[];
   localStorage.removeItem('autochapp_token');localStorage.removeItem('autochapp_user');
   clearInterval(poll);
 }
@@ -85,6 +104,7 @@ async function load(){
     conversations.value=c.conversations;
     if(!activeAccount.value&&accounts.value.length)activeAccount.value=accounts.value[0];
     if(activeAccount.value)activeAccount.value=accounts.value.find(x=>x.id===activeAccount.value.id)||accounts.value[0]||null;
+    openChats.value=openChats.value.map(c=>conversations.value.find(x=>x.id===c.id)).filter(Boolean);
     if(activeConversation.value){
       activeConversation.value=conversations.value.find(c=>c.id===activeConversation.value.id)||null;
       if(activeConversation.value)await loadMessages();
@@ -109,6 +129,7 @@ async function refresh(){
     accounts.value=a.accounts;
     conversations.value=c.conversations;
     if(activeAccount.value)activeAccount.value=accounts.value.find(x=>x.id===activeAccount.value.id)||null;
+    openChats.value=openChats.value.map(c=>conversations.value.find(x=>x.id===c.id)).filter(Boolean);
     if(activeConversation.value){
       activeConversation.value=conversations.value.find(x=>x.id===activeConversation.value.id)||null;
       if(activeConversation.value)await loadMessages();
@@ -149,7 +170,9 @@ async function removeAccount(a){
   if(!confirm(`Supprimer le compte "${a.label}" et toutes ses conversations ?`))return;
   busy.value=true;
   try{
-    await api(`/api/accounts/${a.id}`,{method:'DELETE'});
+    const result=await api(`/api/accounts/${a.id}`,{method:'DELETE'});
+    if(result.warning)notifySuccess(result.warning);
+    openChats.value=openChats.value.filter(c=>c.account_id!==a.id);
     if(activeAccount.value?.id===a.id)activeAccount.value=null;
     if(activeConversation.value?.account_id===a.id)activeConversation.value=null;
     if(qrData.value?.id===a.id)qrData.value=null;
@@ -159,6 +182,7 @@ async function removeAccount(a){
 }
 
 async function selectConversation(c){
+  openChats.value=[...openChats.value.filter(item=>item.id!==c.id),c].slice(-7);
   activeConversation.value=c;
   section.value='inbox';
   sidebarMobile.value=false;
@@ -652,10 +676,10 @@ async function deleteModel(m){
           </div>
           <div class="conversation-scroll">
             <button v-for="c in filtered" :key="c.id" class="conversation-item" :class="{active:c.id===activeConversation?.id}" @click="selectConversation(c)">
-              <span class="contact-avatar">{{c.title[0]?.toUpperCase()||'?'}}</span>
+              <span class="contact-avatar">{{contactName(c)[0]}}<img v-if="c.avatar_url" :src="c.avatar_url" alt="" loading="lazy" referrerpolicy="no-referrer" @error="$event.target.style.display='none'"/></span>
               <span class="conv-info">
-                <strong>{{c.title}}</strong>
-                <small>{{c.jid.split('@')[0]}}</small>
+                <strong>{{contactName(c)}}</strong>
+                <small>{{contactPhone(c)||'Numéro non disponible'}}</small>
               </span>
               <span class="mode-mini" :class="c.mode">{{c.mode==='manual'?'MOI':c.mode==='ai'?'IA':'MIX'}}</span>
             </button>
@@ -668,13 +692,23 @@ async function deleteModel(m){
           <button class="connect-banner" @click="showAdd=true"><Plus :size="17"/> Connecter un compte WhatsApp</button>
         </div>
 
+        <!-- Vertical dock for opened conversations -->
+        <div v-if="openChats.length" class="floating-chat-rail" aria-label="Discussions ouvertes">
+          <div v-for="c in openChats" :key="c.id" class="floating-chat-tab" :class="{selected:activeConversation?.id===c.id}">
+            <button class="floating-chat-select" @click="selectConversation(c)" :title="contactName(c)">
+              <span class="contact-avatar">{{contactName(c)[0]}}<img v-if="c.avatar_url" :src="c.avatar_url" alt="" referrerpolicy="no-referrer" @error="$event.target.style.display='none'"/></span>
+              <span class="floating-chat-tab-name">{{contactName(c)}}</span>
+            </button>
+            <button class="floating-chat-close" :aria-label="'Fermer '+contactName(c)" @click="closeChat(c.id)"><X :size="15"/></button>
+          </div>
+        </div>
+
         <!-- CHAT CONVERSATION VIEW -->
-        <div class="chat-main" v-if="activeConversation">
+        <div class="chat-main chat-floating-window" v-if="activeConversation" role="dialog" :aria-label="'Discussion avec '+contactName(activeConversation)">
           <div class="chat-header">
-            <span class="contact-avatar chat-contact">{{activeConversation.title[0]?.toUpperCase()}}</span>
+            <span class="contact-avatar chat-contact">{{contactName(activeConversation)[0]}}<img v-if="activeConversation.avatar_url" :src="activeConversation.avatar_url" alt="" referrerpolicy="no-referrer" @error="$event.target.style.display='none'"/></span>
             <div class="chat-header-info">
-              <strong>{{activeConversation.title}}</strong>
-              <small>{{activeConversation.jid.split('@')[0]}}</small>
+              <div class="contact-ident"><strong>{{contactName(activeConversation)}}</strong><small>{{contactPhone(activeConversation)||'Numéro non disponible'}}</small></div>
             </div>
             <span class="mode-pill" :class="activeConversation.mode">
               <Bot v-if="activeConversation.mode==='ai'" :size="15"/>
@@ -683,6 +717,7 @@ async function deleteModel(m){
               {{modeLabel(activeConversation.mode)}}
             </span>
             <button class="icon-circle" title="Paramètres de l'assistant pour ce contact" @click="openSettings"><Settings2 :size="19"/></button>
+             <button class="icon-circle" title="Fermer la fenêtre" @click="closeChat(activeConversation.id)"><X :size="18"/></button>
           </div>
 
           <div class="chat-messages">

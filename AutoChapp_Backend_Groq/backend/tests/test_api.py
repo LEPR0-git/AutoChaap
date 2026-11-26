@@ -34,3 +34,38 @@ def test_webhook_dedup(client):
     assert client.post('/internal/events',headers=hdr,json=body).status_code==200
     assert client.post('/internal/events',headers=hdr,json=body).json['duplicate']
     with client.application.app_context():assert Message.query.count()==1
+
+
+def test_remove_disconnected_account_even_if_bridge_unavailable(client):
+    from unittest.mock import patch
+    import requests
+    h=user(client)
+    account=client.post('/api/accounts',headers=h,json={'label':'Déconnecté'}).json['account']
+    with client.application.app_context():
+        c=Conversation(account_id=account['id'],jid='237690000000@s.whatsapp.net',title='237690000000@s.whatsapp.net')
+        db.session.add(c);db.session.flush()
+        db.session.add(Message(conversation_id=c.id,content='Test',direction='in',sender='contact'))
+        db.session.commit()
+    with patch('app.main.requests.request',side_effect=requests.ConnectionError('bridge offline')):
+        result=client.delete('/api/accounts/'+account['id'],headers=h)
+    assert result.status_code==200
+    assert result.json['ok'] is True
+    assert 'warning' in result.json
+    assert client.get('/api/accounts',headers=h).json['accounts']==[]
+    with client.application.app_context():
+        assert Conversation.query.count()==0
+        assert Message.query.count()==0
+
+def test_profile_picture_from_whatsapp_event(client):
+    h=user(client)
+    account=client.post('/api/accounts',headers=h,json={'label':'Business'}).json['account']
+    body={
+        'type':'message','account_id':account['id'],'jid':'237690000001@s.whatsapp.net',
+        'title':'Jean','avatar_url':'https://example.org/avatar.jpg',
+        'text':'Bonjour','message_id':'avatar-event-1'
+    }
+    r=client.post('/internal/events',headers={'X-Bridge-Secret':'bridge-test'},json=body)
+    assert r.status_code==200
+    rows=client.get('/api/conversations',headers=h).json['conversations']
+    assert rows[0]['title']=='Jean'
+    assert rows[0]['avatar_url']=='https://example.org/avatar.jpg'
